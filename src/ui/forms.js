@@ -2,14 +2,14 @@ import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
 import { capitalize, dayString, formatDay, fromLocalInput, toLocalInput } from './format.js';
-import { confirmDialog, field, openPage, toast, validate } from './kit.js';
+import { chipGroup, confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
 
 const TOMORROW = () => new Date(Date.now() + 86_400_000);
 
 // 12345 paise -> "123.45", 12300 -> "123" (what the amount box shows when editing)
 const plainAmount = (paise) => (paise % 100 === 0 ? String(paise / 100) : `${Math.floor(paise / 100)}.${String(paise % 100).padStart(2, '0')}`);
 
-const saveButton = (label = 'Save') => h('button', { class: 'btn primary block' }, label);
+const saveButton = (label) => h('button', { class: 'btn primary block' }, label);
 
 // Runs a save; shows rule errors as a toast and re-enables the button.
 async function submit(button, work) {
@@ -24,32 +24,33 @@ async function submit(button, work) {
   }
 }
 
-function deleteButton(label, onDelete) {
-  return h('button', { class: 'btn danger block', onclick: onDelete }, icon('trash', 18), label);
-}
+const deleteButton = (label, onDelete) => h('button', { class: 'btn danger block', onclick: onDelete }, icon('trash', 18), label);
 
 // ---- expense -----------------------------------------------------------------
 
 export function openExpenseForm(app, existing = null) {
   const store = app.store;
 
-  const category = field('Category', h('select', { class: 'input' },
-    rules.CATEGORIES.map((c) => h('option', { value: c, selected: c === (existing?.category ?? 'travel') }, capitalize(c)))));
-  const amount = field('Amount (₹)', h('input', { class: 'input', type: 'text', inputMode: 'decimal', autocomplete: 'off', placeholder: '450', value: existing ? plainAmount(existing.amount_paise) : '' }));
-  const date = field('Date', h('input', { class: 'input', type: 'date', min: '2020-01-01', max: dayString(TOMORROW()), value: existing?.expense_date ?? dayString() }));
-  const note = field('Note (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 3, value: existing?.note ?? '' }));
+  const category = chipGroup(rules.CATEGORIES.map((c) => ({ value: c, label: capitalize(c) })), existing?.category ?? 'travel');
 
-  amount.input.addEventListener('input', () => {
-    amount.input.value = amount.input.value.replace(/[^0-9.,]/g, '');
+  const amountInput = h('input', { class: 'input', type: 'text', inputMode: 'decimal', autocomplete: 'off', placeholder: '0', 'aria-label': 'Amount in rupees', value: existing ? plainAmount(existing.amount_paise) : '' });
+  amountInput.addEventListener('input', () => {
+    amountInput.value = amountInput.value.replace(/[^0-9.,]/g, '');
   });
+  const amount = slot(h('div', { class: 'amount-card' },
+    h('p', { class: 'eyebrow' }, 'Amount'),
+    h('div', { class: 'amount-line' }, h('span', { class: 'cur', 'aria-hidden': 'true' }, '₹'), amountInput)), amountInput);
+
+  const date = field('Date', h('input', { class: 'input', type: 'date', min: '2020-01-01', max: dayString(TOMORROW()), value: existing?.expense_date ?? dayString() }), null, 'row');
+  const note = field('Note (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 3, value: existing?.note ?? '' }), null, 'row');
 
   // bill photo
   let newBill = null;
   let removeBill = false;
   let billUrl = null;
-  const preview = h('div');
+  const preview = h('div', { style: { width: '100%' } });
   const removeBtn = h('button', {
-    class: 'btn danger block',
+    class: 'btn danger block small-btn',
     onclick() {
       newBill = null;
       removeBill = true;
@@ -86,10 +87,10 @@ export function openExpenseForm(app, existing = null) {
   showBill(null);
   if (existing?.has_bill) store.billFor(existing.id).then((bytes) => !newBill && !removeBill && showBill(bytes));
 
-  const save = saveButton();
+  const save = saveButton('Save expense');
   save.addEventListener('click', async () => {
     const ok = validate([
-      [amount, rules.amount(amount.input.value)],
+      [amount, rules.amount(amountInput.value)],
       [date, rules.expenseDate(date.input.value)],
       [note, rules.optional(note.input.value, { max: rules.MAX_NOTE, label: 'Note' })],
     ]);
@@ -97,8 +98,8 @@ export function openExpenseForm(app, existing = null) {
 
     const done = await submit(save, () => store.saveExpense({
       id: existing?.id,
-      category: category.input.value,
-      amount_paise: rules.parsePaise(amount.input.value),
+      category: category.value,
+      amount_paise: rules.parsePaise(amountInput.value),
       expense_date: date.input.value,
       note: note.input.value,
     }, { bill: newBill, removeBill }));
@@ -110,21 +111,22 @@ export function openExpenseForm(app, existing = null) {
     title: existing ? 'Edit expense' : 'New expense',
     onClose: () => billUrl && URL.revokeObjectURL(billUrl),
     body: h('div', { class: 'stack' },
-      category.el, amount.el, date.el, note.el,
-      h('div', null,
-        h('p', { class: 'eyebrow' }, 'Bill photo'),
+      h('div', null, h('p', { class: 'eyebrow' }, 'Category'), category.el),
+      amount.el, date.el, note.el,
+      h('div', { class: 'bill-drop' },
+        h('div', { class: 'bill-title' }, icon('camera', 20), 'Attach bill photo'),
         preview,
-        h('div', { class: 'grid2', style: { marginTop: '8px' } },
-          h('button', { class: 'btn', onclick: () => pick('camera') }, icon('camera', 18), 'Camera'),
-          h('button', { class: 'btn', onclick: () => pick('gallery') }, icon('image', 18), 'Gallery')),
-        h('div', { style: { marginTop: '8px' } }, removeBtn)),
-      save,
+        h('div', { class: 'grid2' },
+          h('button', { class: 'btn small-btn', onclick: () => pick('camera') }, icon('camera', 18), 'Camera'),
+          h('button', { class: 'btn small-btn', onclick: () => pick('gallery') }, icon('image', 18), 'Gallery')),
+        removeBtn),
       existing ? deleteButton('Delete expense', async () => {
-        if (await confirmDialog({ title: 'Delete this expense?', text: `The bill photo is deleted too. This cannot be undone.` })) {
+        if (await confirmDialog({ title: 'Delete this expense?', text: 'The bill photo is deleted too. This cannot be undone.' })) {
           await store.deleteExpense(existing.id);
           page.close();
         }
       }) : null),
+    footer: save,
   });
 }
 
@@ -139,7 +141,7 @@ export function openClientForm(app, existing = null) {
   const city = field('City (optional)', h('input', { class: 'input', type: 'text', maxLength: 100, autocomplete: 'off', autocapitalize: 'words', value: existing?.city ?? '' }));
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 4, value: existing?.notes ?? '' }));
 
-  const save = saveButton();
+  const save = saveButton('Save client');
   save.addEventListener('click', async () => {
     const ok = validate([
       [name, rules.required(name.input.value, { min: 2, max: 150, label: 'Name' })],
@@ -164,13 +166,14 @@ export function openClientForm(app, existing = null) {
   const page = openPage({
     title: existing ? 'Edit client' : 'New client',
     body: h('div', { class: 'stack' },
-      name.el, company.el, phone.el, city.el, notes.el, save,
+      name.el, company.el, phone.el, city.el, notes.el,
       existing ? deleteButton('Delete client', async () => {
         if (await confirmDialog({ title: `Delete ${existing.name}?`, text: 'Old meetings keep the name. This cannot be undone.' })) {
           await store.deleteClient(existing.id);
           page.close();
         }
       }) : null),
+    footer: save,
   });
 }
 
@@ -189,18 +192,21 @@ export function openMeetingForm(app, existing = null) {
     clients.map((c) => h('option', { value: c.id, selected: known && c.id === existing.client_id }, c.company ? `${c.name} (${c.company})` : c.name)),
     h('option', { value: OTHER, selected: startOn === OTHER }, 'Someone else (type the name)')));
   const typed = field('Client name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: known ? '' : existing?.client_name ?? '' }));
-  const when = field('When', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(TOMORROW()), value: toLocalInput(existing ? new Date(existing.meeting_at) : new Date()) }));
+  const when = field('When', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(TOMORROW()), value: toLocalInput(existing ? new Date(existing.meeting_at) : new Date()) }), null, 'row');
   const purpose = field('Purpose (optional)', h('input', { class: 'input', type: 'text', maxLength: rules.MAX_TEXT, autocomplete: 'off', value: existing?.purpose ?? '' }));
   const discussion = field('What was discussed (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_LONG_TEXT, rows: 5, value: existing?.discussion ?? '' }));
   const outcome = field('Outcome (optional)', h('input', { class: 'input', type: 'text', maxLength: rules.MAX_TEXT, autocomplete: 'off', value: existing?.outcome ?? '' }));
-  const followup = field('Follow-up (optional)', h('input', { class: 'input', type: 'datetime-local', value: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '' }));
+  const followup = field('Follow-up (optional)', h('input', { class: 'input', type: 'datetime-local', value: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '' }), null, 'row');
   const clearFollowup = h('button', { class: 'link', onclick: () => { followup.input.value = ''; } }, 'Remove follow-up');
 
   const syncTyped = () => { typed.el.hidden = client.input.value !== OTHER; };
-  client.input.addEventListener('change', syncTyped);
+  client.input.addEventListener('change', () => {
+    syncTyped();
+    client.setError(null);
+  });
   syncTyped();
 
-  const save = saveButton();
+  const save = saveButton('Save meeting');
   save.addEventListener('click', async () => {
     const chosen = client.input.value === OTHER ? null : store.clientById(client.input.value);
     const clientName = chosen ? chosen.name : typed.input.value;
@@ -235,12 +241,13 @@ export function openMeetingForm(app, existing = null) {
   const page = openPage({
     title: existing ? 'Edit meeting' : 'New meeting',
     body: h('div', { class: 'stack' },
-      client.el, typed.el, when.el, purpose.el, discussion.el, outcome.el, followup.el, clearFollowup, save,
+      client.el, typed.el, when.el, purpose.el, discussion.el, outcome.el, followup.el, clearFollowup,
       existing ? deleteButton('Delete meeting', async () => {
         if (await confirmDialog({ title: 'Delete this meeting?', text: `Meeting with ${existing.client_name} on ${formatDay(new Date(existing.meeting_at))}.` })) {
           await store.deleteMeeting(existing.id);
           page.close();
         }
       }) : null),
+    footer: save,
   });
 }

@@ -20,14 +20,14 @@ Keep this file up to date after every batch of work.
 4. **Update this CLAUDE.md after every batch of work.**
 5. Never write secrets (passwords, keystore, tokens) into any file in this repo.
 6. Ask before destructive actions. Never delete the owner's files without a clear answer (see section 9: disk clean-up).
-7. Palette only (same as the website); no new colours. UI text in English. Mobile first.
+7. Palette only: the website's colours, in a **light and a dark variant** (tokens in `src/style.css`, section 7). No new colours, and no hard-coded colour outside the token block. UI text in English. Mobile first. No emoji; icons are the inline SVG line icons in `src/ui/dom.js`.
 8. Never use native `alert/confirm/prompt`: use `confirmDialog`, `alertDialog`, `dialog`, `toast` from `src/ui/kit.js`.
 
 ## 3. Hard rules (do not break)
 
 1. **Never change `appId` `com.agarwalbrothers.sales`** (capacitor.config.json, android/app/build.gradle). A new id is a new app and all data on the phones is lost on update.
 2. **Never change the signing key.** It lives OUTSIDE the repo: `C:\Users\DELL\ab-sales-keystore\` (`ab-sales.p12`, `KEYSTORE_PASSWORD.txt`, `KEYSTORE_BASE64.txt`). The owner must **back it up** and paste the two GitHub secrets `KEYSTORE_BASE64` and `KEYSTORE_PASSWORD` (alias is `absales`). A different key blocks in-place updates.
-3. **No network calls in the app** (`fetch`, `XMLHttpRequest`, `WebSocket`, analytics, remote scripts). A test (`tests/source-rules.test.js`) fails if any appear. The manifest has **no `uses-permission` at all**.
+3. **No network calls in the app** (`fetch`, `XMLHttpRequest`, `WebSocket`, analytics, remote scripts). A test (`tests/source-rules.test.js`) fails if any appear. The manifest asks for **no dangerous permission and no INTERNET** (the built APK lists only `USE_BIOMETRIC` / `USE_FINGERPRINT`, normal permissions added by the secure-storage plugin and unused, and an internal androidx one).
 4. Never use `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `eval`: text goes in through `h()` in `src/ui/dom.js` (text nodes only). Tested.
 5. **Stored data format is a promise:** records and keys in `src/data/store.js` (`e:`, `c:`, `m:`, `b:` slots, field names). New fields get defaults when read; never rename or drop old ones, or phones with data break. Field names already match what the office server will use (`uuid`, `amount_paise`, `expense_date`, `next_followup_at` ...).
 6. `status` of an expense is never taken from the phone's form: only the office will change it, later, through sync. `Store.saveExpense` keeps the old value.
@@ -36,7 +36,7 @@ Keep this file up to date after every batch of work.
 
 ## 4. Stack
 
-- **Vite 8 + vanilla JavaScript** (ES modules, no framework) → wrapped by **Capacitor 8** into an Android APK. Fonts: IBM Plex Sans + IBM Plex Mono via `@fontsource` (bundled, works offline).
+- **Vite 8 + vanilla JavaScript** (ES modules, no framework) → wrapped by **Capacitor 8** into an Android APK. Fonts via `@fontsource` (bundled, work offline): **Sora** (headings, amounts), **Manrope** (all UI text), **JetBrains Mono** (small uppercase labels).
 - **Plugins:** `@capacitor-community/sqlite` (durable storage), `@aparajita/capacitor-secure-storage` (Android Keystore backed secrets), `@capacitor/camera` (system camera / gallery, no CAMERA permission), `@capacitor/share` + `@capacitor/filesystem` (export), `@capacitor/app` (background / back button).
 - **Build:** GitHub Actions (`.github/workflows/build-apk.yml`) runs tests, builds and signs the APK. **This laptop (8 GB RAM, 2 cores) cannot build it locally and does not need to.**
 - Browser preview: `npm run dev` → http://127.0.0.1:5173 (Chrome mobile view, Ctrl+Shift+M). Production-like preview with the CSP: `npm run build` then `npm run preview` → http://127.0.0.1:4173.
@@ -52,8 +52,10 @@ src/
   security/            crypto.js (WebCrypto helpers), vault.js (PIN, key wrapping, lockout)
   data/                store.js (encrypted records), persist.js (Memory / LocalStorage persistence)
   platform/            native.js (phone: SQLite, Keystore, camera, share), web.js (browser preview only)
-  ui/                  dom.js, kit.js (pages, dialogs, toast, field), auth.js, tabs.js, forms.js, settings.js, export.js, format.js
-  style.css            all styles (palette tokens in :root)
+  ui/                  dom.js (h, icon, svg), kit.js (pages, dialogs, toast, field, chipGroup), auth.js (setup + lock keypad), tabs.js (4 screens),
+                       forms.js, settings.js (incl. Appearance), export.js, format.js, theme.js (light / dark / system)
+  style.css            all styles; every colour is a token in :root and :root[data-theme="dark"]
+public/theme-init.js   plain script in <head>: sets data-theme before the first paint (no white flash)
 tests/                 node --test: core, vault, store, source-rules   (npm test)
 assets/ab-logo.png     the company logo (copy of the website's sidebar-logo.png); source of all icons
 scripts/make-icons.mjs builds the launcher icons + splash screens from it (needs: npm i --no-save sharp)
@@ -67,16 +69,23 @@ android/               Capacitor project, hardened (manifest, FLAG_SECURE in Mai
 - **Lockout:** 5 wrong PINs, then 30 s, 1 m, 2 m, 5 m, 15 m. Kept in secure storage (survives restart). Weak PINs (111111, 123456, 654321) are refused.
 - **Auto-lock** after 60 s in the background; locking closes the store (decrypted records leave memory) and closes every open page/dialog. The camera pauses the timer on purpose (`app.suspendAutoLock`).
 - **Forgot PIN = erase the app data** (there is no server copy yet; the app says so).
-- **Android:** `allowBackup=false` + data-extraction rules (no cloud/adb backup), cleartext off, `FLAG_SECURE` (no screenshots, blank recent-apps card), WebView debugging off, **no permissions** (INTERNET removed: the app physically cannot send data in version 1; **add it back only together with the server work, plus certificate pinning**).
+- **Android:** `allowBackup=false` + data-extraction rules (no cloud/adb backup), cleartext off, `FLAG_SECURE` (no screenshots, blank recent-apps card), WebView debugging off, **no INTERNET and no dangerous permissions** (INTERNET removed: the app physically cannot send data in version 1; **add it back only together with the server work, plus certificate pinning**).
 - **Content-Security-Policy** in the production build only: own files only, `connect-src 'self'`, no inline script/style.
 - **Export** leaves the phone unencrypted by nature: the app warns before sharing. CSV cells starting with `= + - @` get an apostrophe (formula injection). Export files live in the app's private cache and are deleted on every lock / start.
 - **Logging:** never log PINs, keys or record contents. A test fails on `console.log/info/debug`.
 - **Browser preview is NOT secure** (the "device secret" sits next to the data): it shows a red banner and must never hold real data.
 - Not done yet (ideas): biometric unlock, root detection, certificate pinning (needs the server), encrypted export file.
 
-## 7. Design system
+## 7. Design system (redesign of 24 Oct 2026, made with Claude Design)
 
-Same tokens as the website (see `:root` in `src/style.css`): navy `#0B2545`, link `#0077B6`, cyan `#00B4D8`, cyan-ink `#007C98` (cyan text on light), slate `#6C757D`, ice `#F4F9FB`, success `#2A9D8F`, alert `#E76F51`. Primary buttons: solid navy with a cyan bottom edge. Mono uppercase eyebrow labels. Motion: fade-up about 600 ms, 22 px, 70 ms stagger, only `transform`/`opacity` (cheap on old phones), `prefers-reduced-motion` respected. A `[hidden]` rule forces `display:none` (otherwise flex/grid rules show hidden elements; this bit us).
+- **Two themes**, `light` and `dark`, as CSS variables on `:root` and `:root[data-theme="dark"]` (full table in `src/style.css`). Dark is pure black (AMOLED); the borders carry the structure. Settings > Appearance: **System** (default, follows the phone live), **Light**, **Dark**. The choice is kept in localStorage key `ab-theme` (not secret; `ui/theme.js` and `public/theme-init.js` are the only users) and also sets `<meta name="theme-color">` (`#0B2545` light, `#000000` dark).
+- **Dark-mode glow stays very low** (owner's request): no neon halos. Buttons get a faint soft shadow, the hero card only a hairline cyan border, the PIN dots a barely visible glow. The cyan is a quiet accent. Do not add stronger glows.
+- Light: ice `#F4F9FB` background, white cards, navy `#0B2545` ink and primary buttons (cyan bottom edge). Dark: black, `#0B0F13` cards, `#22D3F5` accent and primary button. Cyan is never body text on light (use `--link` / `--eyebrow`).
+- **Contrast rule: text at least 4.5:1** (3:1 for large). Checked in the browser on every main screen, both themes. One deliberate deviation from the design file: light `--mute` is `#5F6870` (the file says `#6C757D`, which measured 4.4 on the page background and less on chips). Danger *text* uses `--al-ink`, not `--alert`; avatar initials use `--ink`.
+- **Type:** Sora 500-700 for headings and amounts (letter-spacing -0.02em), Manrope for everything else (body 15 px), JetBrains Mono 10.5 px uppercase eyebrows.
+- **Layout:** no top bar. Each screen has a large Sora title (26 px, sub-pages 22 px) on the background. A **floating tab dock** (Home, Expenses, Clients, Meetings) and a pill "add" button above it. Sub-pages (forms, settings) slide up with a pinned Save button. Hero card on Home with the orbit motif and a 7-day bar chart. Custom **numeric keypad** on the lock screen (setup keeps the system keyboard).
+- Radii: cards 18-24, rows 16, inputs 16, chips 20, icon tiles 13. Motion: fade-up about 600 ms, 22 px, 70 ms stagger (only on tab changes), only `transform`/`opacity`, `prefers-reduced-motion` respected.
+- A `[hidden]` rule forces `display:none` (flex/grid rules otherwise show hidden elements; this bit us). The logo (`assets/ab-logo.png`) is blended into the background with CSS (multiply in light, inverted + screen in dark).
 
 ## 8. Commands
 
@@ -90,16 +99,40 @@ npm i --no-save sharp && node scripts/make-icons.mjs   # only after the logo cha
 ```
 Real-browser end-to-end checks were done with **puppeteer-core + the installed Chrome**, installed only in the session scratchpad (never in the project): setup, weak PIN, expense, hostile text, meeting, lock/unlock, reload, lockout, and "nothing readable in browser storage".
 
-## 9. Release / update flow
+## 9. Release / update flow (same system as Prysm)
 
-1. Owner pastes the two GitHub secrets (once).
-2. Commit and push (only when told) → Actions "Build APK" → download artifact `AB-Sales-vX.Y` → install on the phone (over the old app, never uninstall). `versionCode` = GitHub run number; version comes from `package.json` (`1.0.0` is shown as `1.0`; bump only that field).
-3. Android 13+ sideload: if features misbehave, Settings > App > "Allow restricted settings". Play Protect may ask about an unknown APK.
+**Why an update keeps the data:** a new APK is installed OVER the old app. Android allows that only if (1) the `appId` is the same, (2) the APK is signed with the same key, and (3) `versionCode` is higher. The data (SQLite + the Keystore secret) stays in the app's private storage and is untouched. **Never uninstall** (`allowBackup` is off: uninstalling deletes the data for good).
+- `appId` `com.agarwalbrothers.sales`: never change. Signing key: never change (alias `absales`; file copy in `C:\Users\DELL\ab-sales-keystore\`, the owner must back it up; GitHub secrets `KEYSTORE_BASE64` and `KEYSTORE_PASSWORD`). `versionCode` = GitHub run number (CI) so it only goes up.
+- **Data compatibility:** a newer version must read what an older one stored. Only ADD fields, give each a default in `DEFAULTS` (`src/data/store.js`, Prysm's `normalize()` idea). `tests/compat.test.js` + `tests/fixtures/v1.0-data.json` hold real v1.0 records and must keep passing; never regenerate the fixture.
+- **CI fails on purpose** when the two signing secrets are missing (Prysm builds a throw-away-key APK; that APK could never update an installed copy, and the only way out would be an uninstall = data loss).
+
+**To ship a new version**
+1. Make the change; keep the data rules above.
+2. Bump `version` in `package.json` only (`1.0.0` -> `1.1.0`; shown as `v1.1` in Settings, `versionName` `1.1`, APK `AB-Sales-v1.1.apk`). Add the version to the list below.
+3. `npm test` and `npm run build`.
+4. Commit as `AB Sales v1.1: <what changed>`, tag it (`git tag v1.1`) and push the commit and the tag (`git push origin main v1.1`): **only when the owner says so**. The build starts from the TAG (ordinary pushes to main build nothing, so there is never a double build); CI fails if the tag does not match `package.json`.
+5. GitHub Actions "Build APK" runs the tests, builds, signs, uploads the artifact `AB-Sales-v1.1` (a zip) and publishes a **Release** with the plain `AB-Sales-v1.1.apk` (about 5 minutes, on GitHub's computers; this laptop does nothing).
+6. On the phone open https://github.com/Syntaxio-dev/ab-sales-app/releases (signed in to GitHub), download `AB-Sales-v1.1.apk`, install it over the old app. Direct link pattern: `https://github.com/Syntaxio-dev/ab-sales-app/releases/download/v1.1/AB-Sales-v1.1.apk`. A test build without a release: Actions > Build APK > Run workflow (the zip is under "Artifacts").
+
+**One-time setup:** repo > Settings > Secrets and variables > Actions > New repository secret, twice: `KEYSTORE_BASE64` = the whole text of `KEYSTORE_BASE64.txt`, `KEYSTORE_PASSWORD` = the text of `KEYSTORE_PASSWORD.txt` (both in the keystore folder).
+
+**Android 13+ sideload:** if something misbehaves, Settings > App > "Allow restricted settings". Play Protect may ask about an unknown APK.
+
+**Building on this laptop (only when GitHub cannot be used):** works, but slow: it needs JDK 21 (`C:\dev\jdk-21`), the Android SDK (`C:\dev\android-sdk`) and about 15 minutes of Gradle downloads the first time, with only about 1 GB of RAM free. Command (PowerShell): set `JAVA_HOME`, `ANDROID_HOME`, `KEYSTORE_FILE` and `KEYSTORE_PASSWORD`, then in `android`: `.\gradlew.bat assembleRelease --no-daemon --max-workers=1 "-Dorg.gradle.jvmargs=-Xmx1g"`. It must be signed with the same key and have a `versionCode` that is not lower than what is installed (local builds use 1: use `GITHUB_RUN_NUMBER` to raise it). The normal way is GitHub.
+
+### Versions
+- **v1.0** (24 Oct 2026): first release. Expenses with bill photo, clients, meetings with follow-ups, Home summary, export (CSV/JSON), erase all, change PIN, light / dark / system theme, encrypted storage, PIN lock with lockout and auto-lock. A first signed APK (`AB-Sales-v1.0.apk`, versionCode 1) was built on this laptop and checked (company key fingerprint SHA-256 `F1:70:8E:09:75:46:7B:8E:22:C4:D8:B6:1B:36:CE:40:A9:50:47:7F:05:1F:C6:3D:55:A6:8B:92:39:B8:6E:46`, minSdk 26).
+- **v1.1**: skipped on purpose (the owner asked for the next release to be called v1.2).
+- **v1.2** (24 Oct 2026): the redesign (light / dark / system theme, floating dock, hero card, lock keypad, new fonts), the data-compatibility guard (`DEFAULTS` + `tests/compat.test.js`), releases built from tags with a plain-APK Release page, CI refuses to build without the signing secrets.
 
 ## 10. Not verified yet (be honest about these)
 
-- **Nothing ran on a real phone or emulator.** The Java side (MainActivity, Gradle changes) only compiles in CI.
-- Removing `INTERNET` from the manifest, the strict CSP, the camera plugin and the Keystore secure storage were not exercised inside the Android WebView. If the first APK shows a blank screen, first try adding `<uses-permission android:name="android.permission.INTERNET" />` back, then relax the CSP in `vite.config.js`.
+- **v1.0 was installed on the owner's phone and runs** (owner's report, 24 Oct 2026). So the Android WebView, the Keystore secure storage, the strict CSP and the missing INTERNET permission all work. Still not reported or checked: camera / gallery bill photos, export / share on the phone, auto-lock timing, other phone brands. The Java side (MainActivity, Gradle changes) compiled on this laptop and in CI.
+- If a future change makes the app show a blank screen on the phone, first suspect the strict CSP in `vite.config.js` and the missing `INTERNET` permission (try adding `<uses-permission android:name="android.permission.INTERNET" />` back).
+
+- **The redesign was built from the written prompt only.** The visual reference file `AB Sales Redesign.dc.html` was not available on this PC, so the screens were matched to the prompt's tokens and screen descriptions, not compared side by side with the file.
+- `android/` was deliberately not touched, so the native status bar, navigation bar and the Android launch splash are still white/light: on a dark phone the very first moment of a cold start can flash light before the web page paints (the app itself has no flash).
+- Dark mode and the keypad were checked in desktop Chrome (360 px and wide), not on a real phone.
 
 ## 11. Gotchas learned
 
@@ -110,6 +143,10 @@ Real-browser end-to-end checks were done with **puppeteer-core + the installed C
 - `node --test` needs a quoted glob (`"tests/*.test.js"`); the directory form fails on Node 24.
 - PowerShell treats a native command's stderr text as an error under `$ErrorActionPreference='Stop'` (keytool, java -version).
 - Password inputs cannot be "triple-click selected" by tests: clear the value and dispatch `input`.
+- **`element.append(null)` and `replaceChildren(null)` print the word "null"** on the screen. Use `h()` / `append()` from `ui/dom.js` or the `fill()` helper in `tabs.js` (they skip empty parts). The end-to-end test now fails on any stray "null", "undefined" or "NaN" text.
+- Puppeteer reloads the page when `setViewport` changes `isMobile` / `hasTouch`: keep them the same, or the app locks mid-test.
+- `innerText` returns text after CSS `text-transform` (eyebrows come back in capitals): compare accordingly.
+- Removing `sharp` (and other `--no-save` installs) happens on the next `npm install` / `uninstall`: reinstall it when you need `scripts/make-icons.mjs`.
 
 ## 12. Tools on this laptop
 
@@ -124,3 +161,9 @@ Node 24 / npm 11 (everything the project needs). Left over from the abandoned Fl
 - App icon and splash made from the company logo (test-tube + atom mark; adaptive, round and legacy icons; white splash with the full logo) by `scripts/make-icons.mjs`.
 - Verified: 47 Node tests, production build (about 1 s, 17 KB gzip JS), real-Chrome end-to-end run with the CSP on (12 checks, no console errors).
 - Disk clean-up done on the owner's request: temp files and caches, Pictures screenshots, two songs on the Desktop. Website-related images (Desktop "Unbranded chemicals bottels stock images", recent Downloads, Obsidian notes) were deliberately NOT deleted: waiting for the owner's answer.
+
+**24 Oct 2026 (evening): UI redesign, light + dark**
+- New design system from the Claude Design prompt: tokens for both themes, Sora + Manrope + JetBrains Mono (IBM Plex removed), floating dock, large titles, hero card with 7-day bars, expense form with category chips and the big amount card, custom lock keypad, pinned Save buttons. Settings > Appearance (System / Light / Dark, default System). Logic, storage, security and `android/` untouched.
+- Dark glow kept very low on purpose (owner: it must look natural, not pushed).
+- Fixed along the way: the word "null" printed on pages and on empty tabs, hidden elements shown by flex/grid rules, 5 contrast failures in light mode, a meeting form that silently defaulted to "Someone else".
+- Verified: 47 Node tests; production build with the CSP; real-Chrome end-to-end run (setup, weak PIN, expense + filters, hostile text, meeting, theme switch with persistence and no flash on reload, System following the phone live, keypad lock/unlock/lockout, 360 px and wide) with a computed text-contrast check on every main screen in both themes and no console or CSP errors.

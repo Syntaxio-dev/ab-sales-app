@@ -19,3 +19,4 @@ KEYSTORE_*.txt
 
 # Crash logs from Java tools
 hs_err_pid*.log
+android/.kotlin/

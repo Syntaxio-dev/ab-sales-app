@@ -1,16 +1,39 @@
-import { ValidationError } from '../data/store.js';
 import * as rules from '../core/rules.js';
+import { ValidationError } from '../data/store.js';
 import { pinInput } from './auth.js';
 import { h, icon } from './dom.js';
 import { allJson, clientsCsv, expensesCsv, meetingsCsv } from './export.js';
 import { confirmDialog, dialog, openPage, toast } from './kit.js';
+import { getChoice, setChoice } from './theme.js';
 
-const row = (iconName, title, sub, onclick, extra = {}) =>
-  h('button', { class: `item${extra.danger ? ' danger-text' : ''}`, onclick },
-    h('span', { style: { color: extra.danger ? 'var(--alert)' : 'var(--link)' } }, icon(iconName, 22)),
+const row = (iconName, title, sub, onclick, { danger = false } = {}) =>
+  h('button', { class: 'item', onclick },
+    h('span', { class: 'tile-icon', style: danger ? { color: 'var(--al-ink)' } : null }, icon(iconName, 20)),
     h('span', { class: 'grow' },
-      h('span', { class: 'title', style: extra.danger ? { color: 'var(--alert)' } : null }, title),
-      sub ? h('span', { class: 'sub', style: { display: 'block' } }, sub) : null));
+      h('span', { class: 'title', style: danger ? { color: 'var(--al-ink)' } : null }, title),
+      sub ? h('span', { class: 'sub' }, sub) : null));
+
+const group = (label, ...children) => h('div', { class: 'group' }, h('p', { class: 'eyebrow' }, label), ...children);
+
+// System / Light / Dark. The choice is applied at once and remembered (see ui/theme.js).
+function appearance() {
+  const options = [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']];
+  const el = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Appearance' });
+
+  const draw = () => {
+    const current = getChoice();
+    el.replaceChildren(...options.map(([value, label]) => h('button', {
+      type: 'button', role: 'radio', 'aria-checked': String(value === current),
+      onclick() {
+        setChoice(value);
+        draw();
+      },
+    }, label)));
+  };
+  draw();
+
+  return group('Appearance', el, h('p', { class: 'muted small', style: { marginTop: '8px' } }, 'System follows your phone\'s light or dark setting.'));
+}
 
 export function openSettings(app) {
   const profile = app.store.profile;
@@ -94,32 +117,28 @@ export function openSettings(app) {
   openPage({
     title: 'Settings',
     body: h('div', null,
-      profile ? h('div', { class: 'card' }, row('key', profile.name, `Employee code ${profile.employee_code}`, () => {})) : null,
+      profile ? h('div', { class: 'card' }, h('div', { class: 'item', style: { border: 0, cursor: 'default' } },
+        h('span', { class: 'avatar' }, profile.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('')),
+        h('span', { class: 'grow' }, h('span', { class: 'title' }, profile.name), h('span', { class: 'sub' }, `Employee code ${profile.employee_code}`)))) : null,
 
-      h('div', { class: 'settings-group' },
-        h('p', { class: 'eyebrow' }, 'Export'),
-        h('div', { class: 'card' },
-          row('share', 'Expenses (CSV)', null, () => exportFile('expenses.csv', expensesCsv, 'text/csv')),
-          row('share', 'Clients (CSV)', null, () => exportFile('clients.csv', clientsCsv, 'text/csv')),
-          row('share', 'Meetings (CSV)', null, () => exportFile('meetings.csv', meetingsCsv, 'text/csv')),
-          row('share', 'Everything (JSON)', 'For the office system. Bill photos are not included.', () => exportFile('ab-sales-export.json', allJson, 'application/json')))),
+      appearance(),
 
-      h('div', { class: 'settings-group' },
-        h('p', { class: 'eyebrow' }, 'Security'),
-        h('div', { class: 'card' },
-          row('key', 'Change PIN', null, changePin),
-          row('lock', 'Lock now', null, () => app.lock()))),
+      group('Export', h('div', { class: 'card' },
+        row('share', 'Expenses (CSV)', null, () => exportFile('expenses.csv', expensesCsv, 'text/csv')),
+        row('share', 'Clients (CSV)', null, () => exportFile('clients.csv', clientsCsv, 'text/csv')),
+        row('share', 'Meetings (CSV)', null, () => exportFile('meetings.csv', meetingsCsv, 'text/csv')),
+        row('share', 'Everything (JSON)', 'For the office system. Bill photos are not included.', () => exportFile('ab-sales-export.json', allJson, 'application/json')))),
 
-      h('div', { class: 'settings-group' },
-        h('p', { class: 'eyebrow' }, 'Privacy'),
-        h('div', { class: 'card pad muted small' },
-          'This app saves your expenses, bill photos, clients and meetings on this phone only, encrypted and locked with your PIN. ',
-          'It does not read your calls, messages, contacts or location, and it does not send anything over the internet. ',
-          'The app locks itself after a minute in the background, and hides its screen in the recent-apps list.')),
+      group('Security', h('div', { class: 'card' },
+        row('key', 'Change PIN', null, changePin),
+        row('lock', 'Lock now', null, () => app.lock()))),
 
-      h('div', { class: 'settings-group' },
-        h('p', { class: 'eyebrow' }, 'Danger zone'),
-        h('div', { class: 'card' }, row('trash', 'Erase all data', 'Deletes everything on this phone and starts again.', erase, { danger: true }))),
+      group('Privacy', h('div', { class: 'card pad muted small' },
+        'This app saves your expenses, bill photos, clients and meetings on this phone only, encrypted and locked with your PIN. ',
+        'It does not read your calls, messages, contacts or location, and it does not send anything over the internet. ',
+        'The app locks itself after a minute in the background, and hides its screen in the recent-apps list.')),
+
+      group('Danger zone', h('div', { class: 'card' }, row('trash', 'Erase all data', 'Deletes everything on this phone and starts again.', erase, { danger: true }))),
 
       h('p', { class: 'muted small', style: { textAlign: 'center', marginTop: '24px' } }, `Agarwal Brothers Sales · version ${typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev'}`)),
   });

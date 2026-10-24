@@ -1,7 +1,17 @@
-import '@fontsource/ibm-plex-sans/400.css';
-import '@fontsource/ibm-plex-sans/600.css';
-import '@fontsource/ibm-plex-sans/700.css';
-import '@fontsource/ibm-plex-mono/600.css';
+import '@fontsource/manrope/latin-400.css';
+import '@fontsource/manrope/latin-500.css';
+import '@fontsource/manrope/latin-600.css';
+import '@fontsource/manrope/latin-700.css';
+import '@fontsource/manrope/latin-800.css';
+import '@fontsource/manrope/latin-ext-500.css';
+import '@fontsource/manrope/latin-ext-700.css';
+import '@fontsource/sora/latin-500.css';
+import '@fontsource/sora/latin-600.css';
+import '@fontsource/sora/latin-700.css';
+import '@fontsource/sora/latin-ext-500.css';
+import '@fontsource/sora/latin-ext-600.css';
+import '@fontsource/jetbrains-mono/latin-500.css';
+import '@fontsource/jetbrains-mono/latin-600.css';
 import { Capacitor } from '@capacitor/core';
 
 import './style.css';
@@ -10,8 +20,12 @@ import { Vault } from './security/vault.js';
 import { renderLock, renderSetup } from './ui/auth.js';
 import { h, icon } from './ui/dom.js';
 import { closeAll, closeTop } from './ui/kit.js';
-import { openSettings } from './ui/settings.js';
+import { applyTheme, watchSystemTheme } from './ui/theme.js';
 import { renderClients, renderExpenses, renderHome, renderMeetings } from './ui/tabs.js';
+
+// Before anything is drawn: the saved light / dark choice (public/theme-init.js already did it before the first paint).
+applyTheme();
+watchSystemTheme();
 
 const TABS = [
   { id: 'home', label: 'Home', icon: 'home', render: renderHome },
@@ -55,41 +69,39 @@ async function boot() {
     }
   }
 
+  // Large-title screen on the background, a floating dock at the bottom and a floating "add" button above it.
   function renderShell(screen) {
-    const title = h('h1');
     const view = h('main', { class: 'view' });
-    const tabsBar = h('nav', { class: 'tabs', 'aria-label': 'Sections' });
+    const dock = h('nav', { class: 'dock', 'aria-label': 'Sections' });
+    const fabSlot = h('div', { class: 'fab-slot' });
 
-    const draw = () => {
-      const current = TABS.find((t) => t.id === tab);
-      title.textContent = current.label;
-      view.scrollTop = 0;
-      current.render(view, app, { goTab });
-      tabsBar.replaceChildren(...TABS.map((t) => h('button', { class: 'tab', 'aria-current': t.id === tab ? 'page' : null, onclick: () => goTab(t.id) },
-        h('span', { class: 'pill' }, icon(t.icon, 22)), t.label)));
-    };
-    const goTab = (id) => {
-      tab = id;
-      draw();
+    const ctx = {
+      goTab: (id) => {
+        tab = id;
+        draw(true);
+      },
+      fab: (label, onclick) => fabSlot.replaceChildren(...(label ? [h('button', { class: 'btn primary fab-pill', onclick }, icon('plus', 18), label)] : [])),
     };
 
-    screen.append(
-      h('header', { class: 'topbar' },
-        title,
-        h('button', { class: 'iconbtn', 'aria-label': 'Lock now', onclick: () => app.lock() }, icon('lock')),
-        h('button', { class: 'iconbtn', 'aria-label': 'Settings', onclick: () => openSettings(app) }, icon('settings'))),
-      view,
-      tabsBar,
-    );
-
-    draw();
-    // a saved change redraws the list underneath (open forms are not touched)
-    unsubscribeStore = app.store.subscribe(() => {
-      const keepScroll = view.scrollTop;
+    // animate: the screen fades up (only when the person changes tab, not when a saved record redraws the list)
+    function draw(animate) {
       const current = TABS.find((t) => t.id === tab);
-      current.render(view, app, { goTab });
+      const keepScroll = animate ? 0 : view.scrollTop;
+
+      view.classList.remove('reveal');
+      current.render(view, app, ctx);
       view.scrollTop = keepScroll;
-    });
+      if (animate) view.classList.add('reveal');
+
+      dock.replaceChildren(...TABS.map((t) => h('button', { class: 'tab', 'aria-current': t.id === tab ? 'page' : null, onclick: () => ctx.goTab(t.id) },
+        h('span', { class: 'pill' }, icon(t.icon, 22)), t.label)));
+    }
+
+    screen.append(h('div', { class: 'shell' }, view, fabSlot, dock));
+    draw(true);
+
+    // a saved change redraws the list underneath (open forms are not touched)
+    unsubscribeStore = app.store.subscribe(() => draw(false));
   }
 
   app.subscribe(show);
@@ -100,7 +112,7 @@ async function boot() {
   platform.onBackButton(() => {
     if (closeTop()) return true;
     if (app.phase === 'unlocked' && tab !== 'home') {
-      document.querySelector('.tab')?.click(); // first tab is Home
+      document.querySelector('.dock .tab')?.click(); // the first tab is Home
       return true;
     }
     return false;
@@ -112,7 +124,7 @@ async function boot() {
 boot().catch((error) => {
   // never show internals (or record contents) to the person; the console only gets the kind of error
   console.error('Startup failed:', error?.name ?? 'Error');
-  document.getElementById('app').replaceChildren(h('div', { class: 'center' }, h('div', { class: 'card pad stack' },
-    h('h1', null, 'Could not start'),
+  document.getElementById('app').replaceChildren(h('div', { class: 'center' }, h('div', { class: 'col left' },
+    h('h1', { class: 'title-xl' }, 'Could not start'),
     h('p', { class: 'muted' }, 'The app could not open its storage. Close it fully and open it again. If it keeps happening, tell your manager.'))));
 });

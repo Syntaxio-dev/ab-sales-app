@@ -38,3 +38,20 @@ export const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1
 // <input type="datetime-local"> value <-> Date (local time, no seconds)
 export const toLocalInput = (date) => `${dayString(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 export const fromLocalInput = (text) => (text ? new Date(text) : null);
+
+// "Ravi Sharma" -> "RS", "Lab Co" -> "LC", "Acme" -> "A"
+export function initials(name) {
+  const words = String(name ?? '').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+  return ((words[0]?.[0] ?? '?') + (words.length > 1 ? words[1][0] : '')).toUpperCase();
+}
+
+// "Sat, 24 Oct" (shown in capitals by the eyebrow style)
+const headDay = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+export const formatHeadDay = (date) => headDay.format(date);
+
+// "₹1,23,456.50" -> { whole: "₹1,23,456", fraction: ".50" }
+export function splitRupees(paise) {
+  const text = rupees(paise);
+  const dot = text.lastIndexOf('.');
+  return { whole: text.slice(0, dot), fraction: text.slice(dot) };
+}

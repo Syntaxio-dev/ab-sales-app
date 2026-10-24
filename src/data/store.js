@@ -15,6 +15,17 @@ export class ValidationError extends Error {}
 const PREFIX = { expense: 'e:', client: 'c:', meeting: 'm:', bill: 'b:' };
 const PROFILE_KEY = 'profile';
 
+// UPDATES KEEP THE DATA. Phones that already hold records get a newer app over the old one, so a newer version must be able
+// to read every record an older version wrote. The rules (the same idea as Prysm's normalize()):
+//  - never rename, remove or change the meaning of a stored field; only ADD fields;
+//  - give every new field a default here, so an old record that lacks it still loads;
+//  - tests/compat.test.js holds real v1.0 records and must keep passing unchanged.
+const DEFAULTS = {
+  expense: { note: '', has_bill: false, status: 'pending', synced: false },
+  client: { company: '', phone: '', city: '', notes: '', synced: false },
+  meeting: { client_id: null, purpose: '', discussion: '', outcome: '', next_followup_at: null, synced: false },
+};
+
 const nowIso = () => new Date().toISOString();
 const check = (...errors) => {
   const error = rules.firstError(...errors);
@@ -43,7 +54,7 @@ export class Store {
     for (const [kind, map] of [['expense', store.#expenses], ['client', store.#clients], ['meeting', store.#meetings]]) {
       for (const slot of await persist.keys(PREFIX[kind])) {
         const record = await store.#read(slot);
-        if (record?.id) map.set(record.id, record);
+        if (record?.id) map.set(record.id, { ...DEFAULTS[kind], ...record });
       }
     }
     store.#profile = await store.#read(PROFILE_KEY);

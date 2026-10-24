@@ -55,6 +55,13 @@ const ICONS = {
   shield: 'M12 3 4 6v6c0 4.5 3.2 7.8 8 9 4.8-1.2 8-4.5 8-9V6z',
   alert: 'M12 4 2.5 20h19zM12 10v4M12 17v.5',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5',
+  backspace: 'M21 5H9l-6 7 6 7h12zM15 9l-4 6M11 9l4 6',
+  menu: 'M4 7h16M4 12h16M4 17h10',
+  car: 'M5 16v-4l2-5h10l2 5v4zM5 16v3M19 16v3M7 12h10',
+  utensils: 'M7 3v7M4.5 3v4.5a2.5 2.5 0 0 0 5 0V3M7 10v11M17 3c-2.2 1.2-3 3.6-3 6.5V13h3M17 3v18',
+  bed: 'M3 19V6M3 15h18v4M21 15v-3a3 3 0 0 0-3-3h-7v6M7.5 12.5a1.5 1.5 0 1 0 0-.01',
+  fuel: 'M5 21V5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v16M3 21h13M7 8h5M14 9h1.5A2.5 2.5 0 0 1 18 11.5V16a1.5 1.5 0 0 0 3 0V9.5L18.5 7',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
 };
 
 export function icon(name, size = 22) {
@@ -64,7 +71,7 @@ export function icon(name, size = 22) {
   svg.setAttribute('height', String(size));
   svg.setAttribute('fill', 'none');
   svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('stroke-width', '1.7');
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
   svg.setAttribute('aria-hidden', 'true');
@@ -73,4 +80,13 @@ export function icon(name, size = 22) {
   path.setAttribute('d', ICONS[name] ?? ICONS.alert);
   svg.append(path);
   return svg;
+}
+
+// Any other inline SVG element (the orbit motif on the hero card). Attributes are set one by one (never as a style string),
+// so the strict CSP stays happy.
+export function svg(tag, attrs = {}, ...children) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, String(value));
+  for (const child of children.flat()) if (child) el.append(child);
+  return el;
 }

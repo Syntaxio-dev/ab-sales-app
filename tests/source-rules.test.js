@@ -47,8 +47,9 @@ test('no analytics, tracking or remote scripts', () => {
   assert.deepEqual(offenders(/google-analytics|gtag\s*\(|firebase|mixpanel|sentry|https?:\/\/(?!localhost|127\.0\.0\.1|www\.w3\.org)/i), []);
 });
 
-test('browser storage is touched only by the preview platform and its own storage class', () => {
-  assert.deepEqual(offenders(/\blocalStorage\b|\bsessionStorage\b|indexedDB/, { except: ['platform/web.js', 'data/persist.js'] }), []);
+test('browser storage is touched only by the preview platform, its own storage class and the theme choice', () => {
+  // ui/theme.js keeps the light / dark choice (not secret). Records and keys never go through it.
+  assert.deepEqual(offenders(/\blocalStorage\b|\bsessionStorage\b|indexedDB/, { except: ['platform/web.js', 'data/persist.js', 'ui/theme.js'] }), []);
 });
 
 test('nothing personal is written to the console', () => {

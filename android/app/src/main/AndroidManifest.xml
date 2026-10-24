@@ -4,7 +4,8 @@
     <!-- Hardened for a private, offline app:
          - allowBackup off + data extraction rules: nothing is copied to Google Drive, another phone or by adb backup
          - cleartext (plain http) off
-         - NO <uses-permission> at all: no internet, storage, contacts, location or phone access.
+         - no <uses-permission> of our own: no internet, storage, contacts, location or phone access. (The secure-storage plugin adds
+           USE_BIOMETRIC and USE_FINGERPRINT, normal permissions that are never asked and not used.)
            The camera and gallery go through the system picker, so no CAMERA permission is needed either.
          If a later version talks to the office server, add INTERNET back then (and certificate pinning). -->
     <application
