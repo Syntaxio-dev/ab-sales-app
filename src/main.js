@@ -16,7 +16,10 @@ import { Capacitor } from '@capacitor/core';
 
 import './style.css';
 import { App } from './app.js';
+import { ALLOW_LOCAL_HTTP, API_BASE, SERVER_URL } from './config.js';
 import { Vault } from './security/vault.js';
+import { SyncEngine } from './sync/engine.js';
+import { createHttp } from './sync/http.js';
 import { renderLock, renderSetup } from './ui/auth.js';
 import { h, icon } from './ui/dom.js';
 import { closeAll, closeTop } from './ui/kit.js';
@@ -34,6 +37,27 @@ const TABS = [
   { id: 'meetings', label: 'Meetings', icon: 'calendar', render: renderMeetings },
 ];
 
+const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
+
+// "Pixel 7" out of "Mozilla/5.0 (Linux; Android 14; Pixel 7 Build/...) ..." (the office only shows it in the rep list)
+function deviceModel() {
+  const match = /Android [\d.]+; ([^;)]+)/.exec(navigator.userAgent);
+  return (match?.[1] ?? 'Unknown').replace(/\sBuild\/.*/, '').trim().slice(0, 100);
+}
+
+// No office address in this build (or an unsafe one) = no office link at all; the app still works on its own.
+function makeSyncFactory() {
+  if (!SERVER_URL) return null;
+
+  try {
+    const http = createHttp({ base: API_BASE, allowLocalHttp: ALLOW_LOCAL_HTTP, appVersion: APP_VERSION });
+    return (store) => new SyncEngine({ store, http, appVersion: APP_VERSION, deviceModel: deviceModel() });
+  } catch (error) {
+    console.error('Office link disabled:', error?.name ?? 'Error');
+    return null;
+  }
+}
+
 async function boot() {
   const root = document.getElementById('app');
 
@@ -41,19 +65,27 @@ async function boot() {
     ? await (await import('./platform/native.js')).createNativePlatform()
     : await (await import('./platform/web.js')).createWebPlatform();
 
-  const app = new App({ vault: new Vault(platform.secrets), persist: platform.persist, platform });
+  const app = new App({ vault: new Vault(platform.secrets), persist: platform.persist, platform, syncFactory: makeSyncFactory() });
 
   let tab = 'home';
   let leaveScreen = () => {};
   let unsubscribeStore = () => {};
+  let cleanups = []; // what the current tab screen subscribed to; run before it is drawn again
 
   // ---- the three states of the app ------------------------------------------------
+
+  function runCleanups() {
+    const list = cleanups;
+    cleanups = [];
+    for (const fn of list) fn();
+  }
 
   function show(phase) {
     leaveScreen();
     leaveScreen = () => {};
     unsubscribeStore();
     unsubscribeStore = () => {};
+    runCleanups();
     closeAll(); // no form or dialog may stay on screen while locked
 
     // the page container is (re)built each time, below the optional preview banner
@@ -81,6 +113,7 @@ async function boot() {
         draw(true);
       },
       fab: (label, onclick) => fabSlot.replaceChildren(...(label ? [h('button', { class: 'btn primary fab-pill', onclick }, icon('plus', 18), label)] : [])),
+      onCleanup: (fn) => cleanups.push(fn),
     };
 
     // animate: the screen fades up (only when the person changes tab, not when a saved record redraws the list)
@@ -89,6 +122,7 @@ async function boot() {
       const keepScroll = animate ? 0 : view.scrollTop;
 
       view.classList.remove('reveal');
+      runCleanups();
       current.render(view, app, ctx);
       view.scrollTop = keepScroll;
       if (animate) view.classList.add('reveal');
@@ -109,6 +143,7 @@ async function boot() {
   // ---- lock when the app was away for a while, and the phone's back button --------------
 
   platform.onAppState((active) => (active ? app.backInForeground() : app.goneToBackground()));
+  window.addEventListener('online', () => app.sync?.schedule(1500)); // the network is back: send what is waiting
   platform.onBackButton(() => {
     if (closeTop()) return true;
     if (app.phase === 'unlocked' && tab !== 'home') {

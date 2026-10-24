@@ -4,6 +4,7 @@ import { pinInput } from './auth.js';
 import { h, icon } from './dom.js';
 import { allJson, clientsCsv, expensesCsv, meetingsCsv } from './export.js';
 import { confirmDialog, dialog, openPage, toast } from './kit.js';
+import { officeSettings } from './office.js';
 import { getChoice, setChoice } from './theme.js';
 
 const row = (iconName, title, sub, onclick, { danger = false } = {}) =>
@@ -37,6 +38,7 @@ function appearance() {
 
 export function openSettings(app) {
   const profile = app.store.profile;
+  const cleanups = [];
 
   async function exportFile(name, build, mime) {
     const ok = await confirmDialog({
@@ -116,12 +118,15 @@ export function openSettings(app) {
 
   openPage({
     title: 'Settings',
+    onClose: () => cleanups.forEach((fn) => fn()),
     body: h('div', null,
       profile ? h('div', { class: 'card' }, h('div', { class: 'item', style: { border: 0, cursor: 'default' } },
         h('span', { class: 'avatar' }, profile.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('')),
         h('span', { class: 'grow' }, h('span', { class: 'title' }, profile.name), h('span', { class: 'sub' }, `Employee code ${profile.employee_code}`)))) : null,
 
       appearance(),
+
+      group('Office', officeSettings(app, (fn) => cleanups.push(fn))),
 
       group('Export', h('div', { class: 'card' },
         row('share', 'Expenses (CSV)', null, () => exportFile('expenses.csv', expensesCsv, 'text/csv')),
@@ -135,7 +140,7 @@ export function openSettings(app) {
 
       group('Privacy', h('div', { class: 'card pad muted small' },
         'This app saves your expenses, bill photos, clients and meetings on this phone only, encrypted and locked with your PIN. ',
-        'It does not read your calls, messages, contacts or location, and it does not send anything over the internet. ',
+        'It does not read your calls, messages, contacts or location. Only after you connect to the office, it sends your expenses, bill photos, clients and meetings to the office over a secure connection, and nothing else. ',
         'The app locks itself after a minute in the background, and hides its screen in the recent-apps list.')),
 
       group('Danger zone', h('div', { class: 'card' }, row('trash', 'Erase all data', 'Deletes everything on this phone and starts again.', erase, { danger: true }))),

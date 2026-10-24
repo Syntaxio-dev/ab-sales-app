@@ -38,7 +38,19 @@ jobs:
       - run: npm ci
       # the build stops here if a security, data-compatibility or logic test fails
       - run: npm test
+      - name: The office address must be set for a release
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ -z "$SERVER_URL" ]; then
+            echo "::error::The office address is missing. Add the variable SERVER_URL (for example https://agarwalbrothers.com) under Settings > Secrets and variables > Actions > Variables, then re-run."
+            exit 1
+          fi
+        env:
+          SERVER_URL: ${{ vars.SERVER_URL || 'https://mediumpurple-rook-621617.hostingersite.com' }}
+      # The address is not a secret: it is inside the app anyway. Only https is accepted (see vite.config.js).
+      # Default = the temporary Hostinger link; the repo variable SERVER_URL overrides it (use it when the real domain is live).
       - run: npm run build
+        env:
+          VITE_SERVER_URL: ${{ vars.SERVER_URL || 'https://mediumpurple-rook-621617.hostingersite.com' }}
       - run: npx cap sync android
       - name: Restore signing key
         run: |

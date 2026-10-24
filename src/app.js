@@ -17,7 +17,11 @@ export class App {
   #listeners = new Set();
   #wentToBackground = null;
 
-  constructor({ vault, persist, platform, autoLockMs = AUTO_LOCK_MS, clock = () => Date.now() }) {
+  // The office link (src/sync/engine.js) exists only while the app is unlocked and an office server is configured.
+  sync = null;
+
+  constructor({ vault, persist, platform, syncFactory = null, autoLockMs = AUTO_LOCK_MS, clock = () => Date.now() }) {
+    this.syncFactory = syncFactory;
     this.vault = vault;
     this.persist = persist;
     this.platform = platform;
@@ -50,6 +54,7 @@ export class App {
     await store.saveProfile({ name, employeeCode });
 
     this.store = store;
+    this.#startSync();
     this.#set('unlocked');
   }
 
@@ -59,7 +64,9 @@ export class App {
     if (!result.ok) return result;
 
     this.store = await Store.open(this.persist, result.key);
+    this.#startSync();
     this.#set('unlocked');
+    this.sync?.schedule(800); // catch up with the office as soon as the app is open
     return { ok: true };
   }
 
@@ -68,6 +75,7 @@ export class App {
 
     const store = this.store;
     this.store = null;
+    this.#stopSync();
     this.#set('locked'); // screens leave the data first, then the records are dropped from memory
     await store?.close();
     await this.platform.cleanExports?.();
@@ -84,6 +92,7 @@ export class App {
   async eraseEverything() {
     const store = this.store;
     this.store = null;
+    this.#stopSync();
     await store?.close();
     await this.persist.clear();
     await this.vault.erase();
@@ -102,5 +111,16 @@ export class App {
     this.#wentToBackground = null;
 
     if (!this.suspendAutoLock && since !== null && this.clock() - since >= this.autoLockMs) this.lock();
+    else if (this.phase === 'unlocked') this.sync?.schedule(1500); // back from the background: catch up
+  }
+
+  #startSync() {
+    this.sync = this.syncFactory ? this.syncFactory(this.store) : null;
+    this.sync?.start();
+  }
+
+  #stopSync() {
+    this.sync?.stop();
+    this.sync = null;
   }
 }

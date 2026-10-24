@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Hardened for a private, offline app:
+    <!-- Hardened for a private app that talks to one office server only:
          - allowBackup off + data extraction rules: nothing is copied to Google Drive, another phone or by adb backup
-         - cleartext (plain http) off
-         - no <uses-permission> of our own: no internet, storage, contacts, location or phone access. (The secure-storage plugin adds
+         - cleartext (plain http) off: the office link is https only (and the Content-Security-Policy lists only that one address)
+         - INTERNET is the only permission of our own: no storage, contacts, location or phone access. (The secure-storage plugin adds
            USE_BIOMETRIC and USE_FINGERPRINT, normal permissions that are never asked and not used.)
            The camera and gallery go through the system picker, so no CAMERA permission is needed either.
-         If a later version talks to the office server, add INTERNET back then (and certificate pinning). -->
+         Later: certificate pinning (network_security_config.xml). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:allowBackup="false"
         android:fullBackupContent="false"

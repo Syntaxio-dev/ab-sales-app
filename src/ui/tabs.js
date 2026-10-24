@@ -1,6 +1,7 @@
 import { h, icon, svg } from './dom.js';
 import { openClientForm, openExpenseForm, openMeetingForm } from './forms.js';
 import { capitalize, dayLabel, dayString, formatDay, formatDayTime, formatHeadDay, formatTime, initials, parseDay, rupees, sameDay, splitRupees } from './format.js';
+import { officeCard } from './office.js';
 import { openSettings } from './settings.js';
 
 // The four main screens. Each one fills the scrolling view; `ctx` gives them goTab(id) and fab(label, onclick).
@@ -106,7 +107,7 @@ export function renderHome(container, app, ctx) {
       h('div', { class: 'tile' },
         h('p', { class: 'eyebrow' }, 'Not synced'),
         h('div', { class: 'num' }, String(store.unsyncedCount)),
-        h('div', { class: 'hint' }, 'Saved on this phone'))),
+        h('div', { class: 'hint' }, app.sync?.status.connected ? 'Waiting for the office' : 'Saved on this phone'))),
 
     h('div', null,
       h('div', { class: 'section-head', style: { marginBottom: '10px' } },
@@ -116,10 +117,7 @@ export function renderHome(container, app, ctx) {
         ? h('div', { class: 'list' }, followups.map((m) => meetingRow(app, m)))
         : h('div', { class: 'card pad muted' }, 'No follow-ups due in the next 7 days.')),
 
-    h('div', { class: 'card pad stack' },
-      h('p', { class: 'eyebrow', style: { marginBottom: 0 } }, 'Office sync'),
-      h('p', { class: 'muted small' }, 'Sending to the office is not connected yet. Your data is safe here. Use Settings > Export to share a file with your manager.'),
-      h('button', { class: 'btn small-btn', disabled: true }, 'Sync now (coming soon)')),
+    officeCard(app, ctx),
   );
   ctx.fab(null);
 }

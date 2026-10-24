@@ -1,7 +1,7 @@
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
-import { capitalize, dayString, formatDay, fromLocalInput, toLocalInput } from './format.js';
+import { capitalize, dayString, formatDay, fromLocalInput, rupees, toLocalInput } from './format.js';
 import { chipGroup, confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
 
 const TOMORROW = () => new Date(Date.now() + 86_400_000);
@@ -28,7 +28,41 @@ const deleteButton = (label, onDelete) => h('button', { class: 'btn danger block
 
 // ---- expense -----------------------------------------------------------------
 
+// An expense the office already approved or rejected: shown, not editable (the office decision always wins).
+function openExpenseView(app, expense) {
+  let billUrl = null;
+  const preview = h('div', { style: { width: '100%' } });
+
+  if (expense.has_bill) {
+    app.store.billFor(expense.id).then((bytes) => {
+      if (!bytes) return;
+      billUrl = URL.createObjectURL(new Blob([bytes]));
+      preview.replaceChildren(h('img', { class: 'bill', src: billUrl, alt: 'Bill photo' }));
+    });
+  }
+
+  const line = (label, value) => h('div', { class: 'srow-box' }, h('label', null, label), h('div', { style: { padding: '0 14px 12px' } }, value));
+  const approved = expense.status === 'approved';
+
+  openPage({
+    title: 'Expense',
+    onClose: () => billUrl && URL.revokeObjectURL(billUrl),
+    body: h('div', { class: 'stack' },
+      h('div', { class: 'card pad stack' },
+        h('span', { class: `chip ${expense.status}` }, capitalize(expense.status)),
+        h('p', { class: 'muted small' }, approved ? 'The office approved this expense. It cannot be changed any more.' : 'The office rejected this expense. It cannot be changed any more.'),
+        !approved && expense.reject_reason ? h('p', { class: 'err' }, `Reason: ${expense.reject_reason}`) : null),
+      line('Category', capitalize(expense.category)),
+      line('Amount', rupees(expense.amount_paise)),
+      line('Date', formatDay(new Date(`${expense.expense_date}T00:00:00`))),
+      expense.note ? line('Note', expense.note) : null,
+      expense.has_bill ? preview : null),
+  });
+}
+
 export function openExpenseForm(app, existing = null) {
+  if (existing && existing.status !== 'pending') return openExpenseView(app, existing);
+
   const store = app.store;
 
   const category = chipGroup(rules.CATEGORIES.map((c) => ({ value: c, label: capitalize(c) })), existing?.category ?? 'travel');

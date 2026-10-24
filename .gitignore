@@ -15,6 +15,7 @@ android/.idea/
 key.properties
 .env
 .env.*
+!.env.development
 KEYSTORE_*.txt
 
 # Crash logs from Java tools

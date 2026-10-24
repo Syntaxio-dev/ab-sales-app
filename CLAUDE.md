@@ -5,9 +5,9 @@ Keep this file up to date after every batch of work.
 
 ## 1. What this is
 
-- **Offline Android app (APK) for the field sales team of Agarwal Brothers** (lab equipment supplier, Jaipur). A rep records **expenses (with a bill photo), clients and meetings** on the phone. Management will later see the data in the website's admin panel.
+- **Offline Android app (APK) for the field sales team of Agarwal Brothers** (lab equipment supplier, Jaipur). A rep records **expenses (with a bill photo), clients and meetings** on the phone (it works fully offline) and, once the rep signs in to the office, the app **syncs them to the website**. Management sees them (and the insights) in the website's admin panel, page **Sales team > Sales management**.
 - **Separate repo:** `https://github.com/Syntaxio-dev/ab-sales-app.git`, branch `main`, remote `origin` is connected. Local path `C:\xampp\htdocs\ab-sales-app`.
-- The website is another project: `C:\xampp\htdocs\AB-new-project1` (Laravel 12 + Filament). Read its `CLAUDE.md` for the palette and its rules. **Never edit the website from this project's sessions unless the owner asks.** (A Sales module was started there and then rolled back on 24 Oct 2026, because the app comes first and the site API will be built to fit the app.)
+- The website is another project: `C:\xampp\htdocs\AB-new-project1` (Laravel 12 + Filament). Read its `CLAUDE.md` for the palette and its rules. **Never edit the website from this project's sessions unless the owner asks.** On 25 Oct 2026 the owner asked for the connection: the website now has an isolated Sales module (`app/Sales`, API `/api/sales/v1`, contract in the website's `docs/sales-api.md`, its own `CLAUDE.md` section). **Rule: every new app feature also gets its table/fields in the API and an insight on the website's Sales management page.** The module is built so it can move to a sub-domain later.
 - The sister app **Prysm** (`C:\xampp\htdocs\personal-app`) uses the same stack and release flow. Its `CLAUDE.md` is the model for this one.
 - Sideloaded APK (no Play Store). Android 8+ (minSdk 26).
 - **Owner:** writes Hinglish, **has no app-development experience**, cannot specify details. So decide like a senior developer, explain briefly in short plain Hinglish, and **think about security risk in every step** (owner's explicit instruction).
@@ -16,7 +16,7 @@ Keep this file up to date after every batch of work.
 
 1. Reply in short, plain Hinglish. Be honest: say what was verified and what was NOT (the Java/native side only compiles in CI; nothing was run on a real phone yet).
 2. **Security first** in every decision (section 6).
-3. **Commit and push only when told** ("commit" / "push kr do"). Nothing is committed yet. Batch changes.
+3. **Commit and push only when told** ("commit" / "push kr do"). Batch changes. (25 Oct: the owner told me to push both projects and update Hostinger after the sync work.)
 4. **Update this CLAUDE.md after every batch of work.**
 5. Never write secrets (passwords, keystore, tokens) into any file in this repo.
 6. Ask before destructive actions. Never delete the owner's files without a clear answer (see section 9: disk clean-up).
@@ -27,10 +27,10 @@ Keep this file up to date after every batch of work.
 
 1. **Never change `appId` `com.agarwalbrothers.sales`** (capacitor.config.json, android/app/build.gradle). A new id is a new app and all data on the phones is lost on update.
 2. **Never change the signing key.** It lives OUTSIDE the repo: `C:\Users\DELL\ab-sales-keystore\` (`ab-sales.p12`, `KEYSTORE_PASSWORD.txt`, `KEYSTORE_BASE64.txt`). The owner must **back it up** and paste the two GitHub secrets `KEYSTORE_BASE64` and `KEYSTORE_PASSWORD` (alias is `absales`). A different key blocks in-place updates.
-3. **No network calls in the app** (`fetch`, `XMLHttpRequest`, `WebSocket`, analytics, remote scripts). A test (`tests/source-rules.test.js`) fails if any appear. The manifest asks for **no dangerous permission and no INTERNET** (the built APK lists only `USE_BIOMETRIC` / `USE_FINGERPRINT`, normal permissions added by the secure-storage plugin and unused, and an internal androidx one).
+3. **The only network code is `src/sync/http.js`** (https only, to the one office address fixed at build time; no `XMLHttpRequest`, `WebSocket`, analytics or remote scripts anywhere). `tests/source-rules.test.js` fails if `fetch` appears outside that file, if its strict options are removed, or if a web address is written into the source. The manifest asks for **INTERNET and nothing else dangerous** (plus the unused normal `USE_BIOMETRIC` / `USE_FINGERPRINT` of the secure-storage plugin).
 4. Never use `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `eval`: text goes in through `h()` in `src/ui/dom.js` (text nodes only). Tested.
-5. **Stored data format is a promise:** records and keys in `src/data/store.js` (`e:`, `c:`, `m:`, `b:` slots, field names). New fields get defaults when read; never rename or drop old ones, or phones with data break. Field names already match what the office server will use (`uuid`, `amount_paise`, `expense_date`, `next_followup_at` ...).
-6. `status` of an expense is never taken from the phone's form: only the office will change it, later, through sync. `Store.saveExpense` keeps the old value.
+5. **Stored data format is a promise:** records and keys in `src/data/store.js` (`e:`, `c:`, `m:`, `b:`, `t:` slots, `profile`, `sync`, field names). New fields get defaults when read; never rename or drop old ones, or phones with data break. Field names already match what the office server will use (`uuid`, `amount_paise`, `expense_date`, `next_followup_at` ...).
+6. `status` of an expense is never taken from the phone's form: only the office changes it, through sync (`putFromServer`). `Store.saveExpense` keeps the old value, and an approved or rejected expense can no longer be edited or deleted on the phone (the app shows it read-only).
 7. Money is whole **paise** (integer). Times are UTC ISO strings; shown in local time. Expense date is a plain `YYYY-MM-DD`.
 8. Build (`npm run build`) and run `npm test` before saying "done".
 
@@ -50,13 +50,15 @@ src/
   app.js               App controller: phase, setUp / unlock / lock / changePin / eraseEverything, auto-lock timer
   core/                phone.js (+91 normalising), rules.js (ALL validation, also re-checked in the store), csv.js (formula-safe)
   security/            crypto.js (WebCrypto helpers), vault.js (PIN, key wrapping, lockout)
-  data/                store.js (encrypted records), persist.js (Memory / LocalStorage persistence)
+  data/                store.js (encrypted records + sync bookkeeping: dirty flags, tombstones, `sync` slot), persist.js (Memory / LocalStorage persistence)
+  sync/                http.js (the ONLY network code), engine.js (SyncEngine: connect, push, bill upload, pull, bill download), merge.js (cleaners + conflict rule)
+  config.js            SERVER_URL / API_BASE from VITE_SERVER_URL (fixed at build time; empty = no office link)
   platform/            native.js (phone: SQLite, Keystore, camera, share), web.js (browser preview only)
   ui/                  dom.js (h, icon, svg), kit.js (pages, dialogs, toast, field, chipGroup), auth.js (setup + lock keypad), tabs.js (4 screens),
-                       forms.js, settings.js (incl. Appearance), export.js, format.js, theme.js (light / dark / system)
+                       forms.js (incl. the read-only reviewed expense), settings.js (incl. Appearance, Office), office.js (Home sync card, Connect page, Settings office group), export.js, format.js, theme.js (light / dark / system)
   style.css            all styles; every colour is a token in :root and :root[data-theme="dark"]
 public/theme-init.js   plain script in <head>: sets data-theme before the first paint (no white flash)
-tests/                 node --test: core, vault, store, source-rules   (npm test)
+tests/                 node --test: core, vault, store, compat, sync (+ helpers/fake-office.js, a fake of the API), source-rules   (npm test)
 assets/ab-logo.png     the company logo (copy of the website's sidebar-logo.png); source of all icons
 scripts/make-icons.mjs builds the launcher icons + splash screens from it (needs: npm i --no-save sharp)
 android/               Capacitor project, hardened (manifest, FLAG_SECURE in MainActivity.java, signing in app/build.gradle)
@@ -68,9 +70,10 @@ android/               Capacitor project, hardened (manifest, FLAG_SECURE in Mai
 - **PIN (6 digits) is never stored.** Stored in the Keystore backed store: salt, a random device secret, and the data key wrapped (AES-GCM) with `KEK = HMAC(deviceSecret, PBKDF2-SHA256(pin, salt, 300 000))`. An attacker needs the device's secret store **and** the PIN. Changing the PIN only re-wraps the key.
 - **Lockout:** 5 wrong PINs, then 30 s, 1 m, 2 m, 5 m, 15 m. Kept in secure storage (survives restart). Weak PINs (111111, 123456, 654321) are refused.
 - **Auto-lock** after 60 s in the background; locking closes the store (decrypted records leave memory) and closes every open page/dialog. The camera pauses the timer on purpose (`app.suspendAutoLock`).
-- **Forgot PIN = erase the app data** (there is no server copy yet; the app says so).
-- **Android:** `allowBackup=false` + data-extraction rules (no cloud/adb backup), cleartext off, `FLAG_SECURE` (no screenshots, blank recent-apps card), WebView debugging off, **no INTERNET and no dangerous permissions** (INTERNET removed: the app physically cannot send data in version 1; **add it back only together with the server work, plus certificate pinning**).
-- **Content-Security-Policy** in the production build only: own files only, `connect-src 'self'`, no inline script/style.
+- **Forgot PIN = erase the app data.** Once the phone was synced, the office holds a copy: sign in again on the fresh install and everything (bill photos too) comes back.
+- **Android:** `allowBackup=false` + data-extraction rules (no cloud/adb backup), cleartext off, `FLAG_SECURE` (no screenshots, blank recent-apps card), WebView debugging off, **no INTERNET and no dangerous permissions**, INTERNET only (added back on 25 Oct 2026 with the office link). Still to do: certificate pinning.
+- **Content-Security-Policy** in the production build only: own files only, `connect-src 'self' <office origin>` (built from `VITE_SERVER_URL`; the build refuses anything but https), no inline script/style.
+- **Office link (sync):** the password is sent once to sign in and is never stored; only the 30-day token is kept, **inside the encrypted data** (it is gone when the app is locked). One phone per rep: signing in on a second phone signs the first out (its data stays). Everything coming from the server is re-validated (`sync/merge.js` cleaners) and shown as text only; the office's decision on an expense always wins; a different account than the one the phone was set up for needs an explicit confirmation. Local development may use `http://127.0.0.1` only (`ALLOW_LOCAL_HTTP` = Vite dev mode).
 - **Export** leaves the phone unencrypted by nature: the app warns before sharing. CSV cells starting with `= + - @` get an apostrophe (formula injection). Export files live in the app's private cache and are deleted on every lock / start.
 - **Logging:** never log PINs, keys or record contents. A test fails on `console.log/info/debug`.
 - **Browser preview is NOT secure** (the "device secret" sits next to the data): it shows a red banner and must never hold real data.
@@ -93,13 +96,15 @@ android/               Capacitor project, hardened (manifest, FLAG_SECURE in Mai
 npm install
 npm run dev            # preview at http://127.0.0.1:5173
 npm run build          # web build into dist/  (about 1 s)
-npm test               # 47 tests (node --test), no extra tools
+npm test               # 91 tests (node --test), no extra tools
 npx cap sync android   # copy the web build and plugins into android/ (CI does it too)
 npm i --no-save sharp && node scripts/make-icons.mjs   # only after the logo changes; rewrites android/.../res icons and splash
 ```
 Real-browser end-to-end checks were done with **puppeteer-core + the installed Chrome**, installed only in the session scratchpad (never in the project): setup, weak PIN, expense, hostile text, meeting, lock/unlock, reload, lockout, and "nothing readable in browser storage".
 
 ## 9. Release / update flow (same system as Prysm)
+
+**The office address:** the workflow default is the temporary Hostinger link; the GitHub repo variable `SERVER_URL` overrides it (Settings > Secrets and variables > Actions > Variables), for example `https://mediumpurple-rook-621617.hostingersite.com` (later the real domain). CI passes it as `VITE_SERVER_URL`; a tag build fails without it. Local `npm run dev` uses `.env.development` (`http://127.0.0.1:8000`, the website's `php artisan serve`; the website's `.env` needs `SALES_CORS_ORIGINS=https://localhost,http://127.0.0.1:5173`). Changing the address = a new build.
 
 **Why an update keeps the data:** a new APK is installed OVER the old app. Android allows that only if (1) the `appId` is the same, (2) the APK is signed with the same key, and (3) `versionCode` is higher. The data (SQLite + the Keystore secret) stays in the app's private storage and is untouched. **Never uninstall** (`allowBackup` is off: uninstalling deletes the data for good).
 - `appId` `com.agarwalbrothers.sales`: never change. Signing key: never change (alias `absales`; file copy in `C:\Users\DELL\ab-sales-keystore\`, the owner must back it up; GitHub secrets `KEYSTORE_BASE64` and `KEYSTORE_PASSWORD`). `versionCode` = GitHub run number (CI) so it only goes up.
@@ -123,6 +128,7 @@ Real-browser end-to-end checks were done with **puppeteer-core + the installed C
 ### Versions
 - **v1.0** (24 Oct 2026): first release. Expenses with bill photo, clients, meetings with follow-ups, Home summary, export (CSV/JSON), erase all, change PIN, light / dark / system theme, encrypted storage, PIN lock with lockout and auto-lock. A first signed APK (`AB-Sales-v1.0.apk`, versionCode 1) was built on this laptop and checked (company key fingerprint SHA-256 `F1:70:8E:09:75:46:7B:8E:22:C4:D8:B6:1B:36:CE:40:A9:50:47:7F:05:1F:C6:3D:55:A6:8B:92:39:B8:6E:46`, minSdk 26).
 - **v1.1**: skipped on purpose (the owner asked for the next release to be called v1.2).
+- **v1.3** (25 Oct 2026): **office sync** (Home card, Connect to office, Settings > Office, read-only approved/rejected expenses, pending/refused indicators), INTERNET permission, CSP `connect-src` for the office.
 - **v1.2** (24 Oct 2026): the redesign (light / dark / system theme, floating dock, hero card, lock keypad, new fonts), the data-compatibility guard (`DEFAULTS` + `tests/compat.test.js`), releases built from tags with a plain-APK Release page, CI refuses to build without the signing secrets.
 
 ## 10. Not verified yet (be honest about these)
@@ -133,6 +139,8 @@ Real-browser end-to-end checks were done with **puppeteer-core + the installed C
 - **The redesign was built from the written prompt only.** The visual reference file `AB Sales Redesign.dc.html` was not available on this PC, so the screens were matched to the prompt's tokens and screen descriptions, not compared side by side with the file.
 - `android/` was deliberately not touched, so the native status bar, navigation bar and the Android launch splash are still white/light: on a dark phone the very first moment of a cold start can flash light before the web page paints (the app itself has no flash).
 - Dark mode and the keypad were checked in desktop Chrome (360 px and wide), not on a real phone.
+
+- **Sync was checked** against the real Laravel dev server with a Node end-to-end run (push, bill upload, office approve/reject, pull, a second phone getting everything back with the bill, delete reaching the other phone, one-phone-at-a-time sign-out) and with a real-Chrome UI run (Connect page, wrong password, link confirmation, sync, read-only approved expense, sign out). **Not yet checked on a real phone / the live server:** the WebView's CORS call to the Hostinger domain (origin `https://localhost`), camera bill upload size on mobile data, behaviour with a flaky network.
 
 ## 11. Gotchas learned
 
@@ -146,6 +154,9 @@ Real-browser end-to-end checks were done with **puppeteer-core + the installed C
 - **`element.append(null)` and `replaceChildren(null)` print the word "null"** on the screen. Use `h()` / `append()` from `ui/dom.js` or the `fill()` helper in `tabs.js` (they skip empty parts). The end-to-end test now fails on any stray "null", "undefined" or "NaN" text.
 - Puppeteer reloads the page when `setViewport` changes `isMobile` / `hasTouch`: keep them the same, or the app locks mid-test.
 - `innerText` returns text after CSS `text-transform` (eyebrows come back in capitals): compare accordingly.
+- **The Android WebView runs under `https://localhost`**: the website's `SALES_CORS_ORIGINS` default must contain it. The app uses the WebView's `fetch` on purpose (not `CapacitorHttp`): timeouts/aborts work and the CSP applies.
+- Re-login on a second phone signs the first out by design; a test script that signs in twice with one account must expect that.
+- Native `replaceChildren(...parts)` prints "null" for empty parts: `.filter(Boolean)` first (bit us again in `ui/office.js`).
 - Removing `sharp` (and other `--no-save` installs) happens on the next `npm install` / `uninstall`: reinstall it when you need `scripts/make-icons.mjs`.
 
 ## 12. Tools on this laptop
@@ -167,3 +178,15 @@ Node 24 / npm 11 (everything the project needs). Left over from the abandoned Fl
 - Dark glow kept very low on purpose (owner: it must look natural, not pushed).
 - Fixed along the way: the word "null" printed on pages and on empty tabs, hidden elements shown by flex/grid rules, 5 contrast failures in light mode, a meeting form that silently defaulted to "Someone else".
 - Verified: 47 Node tests; production build with the CSP; real-Chrome end-to-end run (setup, weak PIN, expense + filters, hostile text, meeting, theme switch with persistence and no flash on reload, System following the phone live, keypad lock/unlock/lockout, 360 px and wide) with a computed text-contrast check on every main screen in both themes and no console or CSP errors.
+
+**24 Oct 2026 (night): v1.2 released**
+- Owner installed the locally built v1.0 on his phone: it runs. Redesign + data-safety tests + tag-based workflow committed (`f6376b0`) and pushed; tag `v1.2` pushed; GitHub Actions run #3 built, tested (53 tests) and signed it, and published the Release https://github.com/Syntaxio-dev/ab-sales-app/releases/tag/v1.2 (`AB-Sales-v1.2.apk`, 16.2 MB).
+- Checked on the downloaded APK: signing certificate SHA-256 identical to v1.0's (so it installs over it), `versionCode` 3 (v1.0 has 1), `versionName` 1.2, minSdk 26, same package.
+- The repo is PUBLIC (visible to anyone, including the Release APK). It holds no secrets; making it private is the owner's choice (repo Settings > General > Danger Zone).
+- Not yet reported by the owner: how v1.2 behaves on the phone (update over v1.0 with the data kept, dark mode, keypad, camera, export).
+
+**25 Oct 2026: office sync (v1.3)**
+- Owner: connect the app to the website, add a Sales management page there, every future feature must show insights on the website, keep the module movable to a sub-domain. Owner then also asked to push both projects and update Hostinger (files and database) for live testing.
+- App: `src/sync/*` (http, merge, engine), store extensions (dirty flags, tombstones, exclusive write queue, reviewed-expense lock), UI (`ui/office.js`, read-only reviewed expenses), `config.js`, CSP connect-src from `VITE_SERVER_URL`, INTERNET permission, CI variable `SERVER_URL`, `.env.development`. 91 Node tests (incl. a fake office server implementing the API contract) + the real-server Node run + the real-Chrome UI run.
+- Website (separate repo, see its CLAUDE.md): `app/Sales` module, API, 5 admin screens, 66 Sales tests.
+- Found and fixed on the way: a lost-edit race between a sync and a user save (writes now go through one queue), a millisecond-precision bug in the conflict rule (server column DATETIME(3)), the sync card printing "null", the reviewed expense amount without Indian formatting, test-harness guard leakage on the website.
