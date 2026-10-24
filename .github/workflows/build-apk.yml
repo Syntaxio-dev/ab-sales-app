@@ -1,0 +1,58 @@
+name: Build APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The workflow only reads the code: it cannot change the repository or its settings.
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      # the build stops here if a security or logic test fails
+      - run: npm test
+      - run: npm run build
+      - run: npx cap sync android
+      - name: Restore signing key
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::KEYSTORE_BASE64 secret missing - the APK is NOT signed with the company key and cannot update an installed copy"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | tr -cd 'A-Za-z0-9+/=' | base64 -d > "$RUNNER_TEMP/ab-sales.p12" || {
+            echo "::error::KEYSTORE_BASE64 is not valid base64. Paste the full text of KEYSTORE_BASE64.txt (not the password, not the file path)."; exit 1; }
+          keytool -list -keystore "$RUNNER_TEMP/ab-sales.p12" -storetype pkcs12 -storepass "$KEYSTORE_PASSWORD" > /dev/null || {
+            echo "::error::Keystore could not be opened. Check KEYSTORE_PASSWORD matches KEYSTORE_PASSWORD.txt exactly."; exit 1; }
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/ab-sales.p12" >> "$GITHUB_ENV"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      - run: chmod +x gradlew && ./gradlew assembleRelease
+        working-directory: android
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      - name: Name the APK after the app version
+        id: apk
+        run: |
+          V=$(node -p "require('./package.json').version.split('.').slice(0, 2).join('.')")
+          F=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          cp "$F" "AB-Sales-v$V.apk"
+          echo "name=AB-Sales-v$V" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.name }}.apk
+          retention-days: 30

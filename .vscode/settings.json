@@ -1,0 +1,10 @@
+{
+  // Flutter builds the android/ folder by itself. VS Code's Java extensions must not try to import it
+  // as a Java project: they fail on the Kotlin Gradle files and show a "Java" warning.
+  "java.import.gradle.enabled": false,
+  "java.import.maven.enabled": false,
+  "java.autobuild.enabled": false,
+  "java.configuration.updateBuildConfiguration": "disabled",
+  "java.gradle.buildServer.enabled": "off",
+  "java.jdt.ls.java.home": null
+}

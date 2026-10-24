@@ -1,0 +1,21 @@
+node_modules/
+dist/
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/.idea/
+*.apk
+*.aab
+
+# Signing keys and secrets must never be committed
+*.jks
+*.keystore
+*.p12
+key.properties
+.env
+.env.*
+KEYSTORE_*.txt
+
+# Crash logs from Java tools
+hs_err_pid*.log

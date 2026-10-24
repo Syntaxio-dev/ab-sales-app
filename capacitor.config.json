@@ -1,0 +1,10 @@
+{
+  "appId": "com.agarwalbrothers.sales",
+  "appName": "AB Sales",
+  "backgroundColor": "#F4F9FB",
+  "webDir": "dist",
+  "android": {
+    "webContentsDebuggingEnabled": false,
+    "allowMixedContent": false
+  }
+}
