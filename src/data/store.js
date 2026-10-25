@@ -1,5 +1,7 @@
 import * as rules from '../core/rules.js';
 import { normalizePhone } from '../core/phone.js';
+import * as enquiryRules from '../core/enquiry.js';
+import { PRESET_POSITIONS, cleanPosition, positionKey } from '../core/positions.js';
 import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/crypto.js';
 
 // All of the rep's data. Every record is encrypted (AES-256-GCM) before it reaches the disk, and its storage slot
@@ -12,10 +14,13 @@ import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/cr
 
 export class ValidationError extends Error {}
 
-const PREFIX = { expense: 'e:', client: 'c:', meeting: 'm:', bill: 'b:', tomb: 't:' };
+const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', enquiry: 'q:', call: 'l:', report: 'r:', bill: 'b:', tomb: 't:' };
 const PROFILE_KEY = 'profile';
 const SYNC_KEY = 'sync';
-const KINDS = ['expense', 'client', 'meeting'];
+const PREFS_KEY = 'prefs';
+const POSITIONS_KEY = 'positions';
+// the order the records are sent in: a client before the people at it
+const KINDS = ['expense', 'client', 'contact', 'meeting', 'enquiry', 'call', 'report'];
 
 // UPDATES KEEP THE DATA. Phones that already hold records get a newer app over the old one, so a newer version must be able
 // to read every record an older version wrote. The rules (the same idea as Prysm's normalize()):
@@ -24,16 +29,25 @@ const KINDS = ['expense', 'client', 'meeting'];
 //  - tests/compat.test.js holds real v1.0 records and must keep passing unchanged.
 const DEFAULTS = {
   expense: { note: '', has_bill: false, bill_synced: false, status: 'pending', synced: false, sync_error: null, reviewed_at: null, reject_reason: null },
-  client: { company: '', phone: '', city: '', notes: '', synced: false, sync_error: null },
-  meeting: { client_id: null, purpose: '', discussion: '', outcome: '', next_followup_at: null, synced: false, sync_error: null },
+  // assigned_to_* and created_by_* are the office's: the phone shows them and never changes them
+  client: { company: '', phone: '', city: '', notes: '', assigned_to_code: null, assigned_to_name: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
+  contact: { client_id: null, position: '', phone: '', email: '', notes: '', created_by_code: null, synced: false, sync_error: null },
+  meeting: { client_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, synced: false, sync_error: null },
+  call: { direction: 'outgoing', number: '', client_id: null, contact_id: null, client_name: '', contact_name: '', duration_seconds: 0, synced: false, sync_error: null },
+  enquiry: { client_id: null, client_name: '', contact_id: null, contact_name: '', status: 'new', items: [], next_followup_at: null, closed_at: null, timeline: [], synced: false, sync_error: null },
+  report: { notes: '', tomorrow_plan: '', issues: '', figures: {}, submitted_at: null, synced: false, sync_error: null },
 };
+
+const MAX_PEOPLE_PER_MEETING = 20;
+const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up further ahead than this
 
 // Every method that changes data. They run ONE AT A TIME, in the order they were called: a save made while the sync is
 // bookkeeping the same record can then never be overwritten by an older copy (two writes finishing in the wrong order).
 const MUTATORS = [
-  'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveMeeting', 'deleteMeeting',
+  'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveContact', 'deleteContact', 'saveMeeting', 'deleteMeeting',
+  'saveEnquiry', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
   'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced',
-  'putFromServer', 'removeFromServer', 'saveBillFromServer',
+  'putFromServer', 'removeFromServer', 'saveBillFromServer', 'wipeEverything',
 ];
 
 const nowIso = () => new Date().toISOString();
@@ -52,8 +66,15 @@ export class Store {
   #sync = null;
   #expenses = new Map();
   #clients = new Map();
+  #contacts = new Map();
   #meetings = new Map();
+  #enquiries = new Map();
+  #reports = new Map();
+  #calls = new Map();
   #profile = null;
+  #prefs = {};
+  #positions = { names: [], pending: [] };
+  #phoneIndex = null; // number -> { client, contact }, rebuilt when clients or people change
 
   #queue = Promise.resolve();
 
@@ -77,14 +98,18 @@ export class Store {
   static async open(persist, key) {
     const store = new Store(persist, key);
 
-    for (const [kind, map] of [['expense', store.#expenses], ['client', store.#clients], ['meeting', store.#meetings]]) {
+    for (const kind of KINDS) {
       for (const slot of await persist.keys(PREFIX[kind])) {
         const record = await store.#read(slot);
-        if (record?.id) map.set(record.id, { ...DEFAULTS[kind], ...record });
+        if (record?.id) store.#map(kind).set(record.id, { ...DEFAULTS[kind], ...record });
       }
     }
     store.#profile = await store.#read(PROFILE_KEY);
     store.#sync = await store.#read(SYNC_KEY);
+    store.#prefs = (await store.#read(PREFS_KEY)) ?? {};
+
+    const positions = await store.#read(POSITIONS_KEY);
+    if (positions && Array.isArray(positions.names)) store.#positions = { names: positions.names.filter((n) => typeof n === 'string'), pending: (positions.pending ?? []).filter((n) => typeof n === 'string') };
 
     for (const slot of await persist.keys(PREFIX.tomb)) {
       const tomb = await store.#read(slot);
@@ -99,8 +124,15 @@ export class Store {
     this.#key = null;
     this.#expenses.clear();
     this.#clients.clear();
+    this.#contacts.clear();
     this.#meetings.clear();
+    this.#enquiries.clear();
+    this.#reports.clear();
+    this.#calls.clear();
     this.#profile = null;
+    this.#prefs = {};
+    this.#positions = { names: [], pending: [] };
+    this.#phoneIndex = null;
     this.#sync = null;
     this.#tombs.clear();
     this.#listeners.clear();
@@ -231,6 +263,12 @@ export class Store {
 
     const id = input.id ?? crypto.randomUUID();
     const old = this.#clients.get(id);
+    const me = this.#profile;
+
+    // one number, one place in the pool (the same rule as for a person)
+    const phone = normalizePhone(input.phone);
+    const taken = phone ? this.numberOwner(phone, { exceptClient: id }) : null;
+    if (taken) throw new ValidationError(`This number is already saved under ${taken}.`);
     const record = {
       id,
       name: input.name.trim(),
@@ -238,6 +276,11 @@ export class Store {
       phone: normalizePhone(input.phone) ?? '',
       city: String(input.city ?? '').trim(),
       notes: String(input.notes ?? '').trim(),
+      // who added it and who works it are the office's: kept as they were, and for a new client "me" (the office does the same)
+      assigned_to_code: old ? old.assigned_to_code : (me?.employee_code ?? null),
+      assigned_to_name: old ? old.assigned_to_name : (me?.name ?? null),
+      created_by_code: old ? old.created_by_code : (me?.employee_code ?? null),
+      created_by_name: old ? old.created_by_name : (me?.name ?? null),
       synced: false,
       sync_error: null,
       created_at: old?.created_at ?? nowIso(),
@@ -246,16 +289,400 @@ export class Store {
 
     await this.#write(PREFIX.client + id, record);
     this.#clients.set(id, record);
+    this.#phoneIndex = null;
     this.#changed();
     return record;
   }
 
-  // Meetings keep the client's name (a copy), so deleting a client loses nothing.
+  // Meetings and calls keep the client's name (a copy), so deleting a client loses nothing. The people at it go with it.
   async deleteClient(id) {
+    for (const person of this.contactsOf(id)) await this.#removeContact(person.id);
+
     await this.#persist.del(PREFIX.client + id);
     this.#clients.delete(id);
+    this.#phoneIndex = null;
     await this.#remember('client', id);
     this.#changed();
+  }
+
+  // May this phone's rep delete the client or person? Only the one who added it (the office checks again); records from before the
+  // office link (created_by_code null) are the rep's own, records the office added have ''.
+  canDelete(record) {
+    const code = record?.created_by_code;
+    return code === null || code === undefined || code === this.#profile?.employee_code; // '' = added by the office: not the rep's to delete
+  }
+
+  // ---- people at a client (the shared pool, like the clients) ---------------------------
+
+  get contacts() {
+    return [...this.#contacts.values()].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  }
+
+  contactsOf(clientId) {
+    return this.contacts.filter((c) => c.client_id === clientId);
+  }
+
+  contactById(id) {
+    return (id && this.#contacts.get(id)) || null;
+  }
+
+  // input: { id?, client_id, name, position, phone, email, notes }
+  async saveContact(input) {
+    check(
+      this.#clients.has(input.client_id) ? null : 'Pick the client this person works at.',
+      rules.required(input.name, { min: 2, max: 150, label: 'Name' }),
+      String(input.position ?? '').trim() ? rules.position(input.position) : null,
+      rules.phone(input.phone),
+      rules.optional(input.email, { max: 150, label: 'E-mail' }),
+      String(input.email ?? '').trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(input.email).trim()) ? 'Enter a valid e-mail address.' : null,
+      rules.optional(input.notes, { max: rules.MAX_NOTE, label: 'Notes' }),
+    );
+
+    const id = input.id ?? crypto.randomUUID();
+    const old = this.#contacts.get(id);
+    const phone = normalizePhone(input.phone) ?? '';
+
+    // one number, one person: a number that is already saved in the pool (under somebody else) is refused
+    const taken = phone ? this.numberOwner(phone, { exceptContact: id }) : null;
+    if (taken) throw new ValidationError(`This number is already saved under ${taken}.`);
+
+    const position = cleanPosition(input.position);
+    const record = {
+      id,
+      client_id: input.client_id,
+      name: input.name.trim(),
+      position,
+      phone,
+      email: String(input.email ?? '').trim(),
+      notes: String(input.notes ?? '').trim(),
+      created_by_code: old ? old.created_by_code : (this.#profile?.employee_code ?? null),
+      synced: false,
+      sync_error: null,
+      created_at: old?.created_at ?? nowIso(),
+      updated_at: nowIso(),
+    };
+
+    await this.#write(PREFIX.contact + id, record);
+    this.#contacts.set(id, record);
+    this.#phoneIndex = null;
+    if (position) await this.#learnPosition(position);
+    this.#changed();
+    return record;
+  }
+
+  async deleteContact(id) {
+    await this.#removeContact(id);
+    this.#changed();
+  }
+
+  async #removeContact(id) {
+    await this.#persist.del(PREFIX.contact + id);
+    this.#contacts.delete(id);
+    this.#phoneIndex = null;
+    await this.#remember('contact', id);
+  }
+
+  // Who has this number already? "Rohit Sharma (JK Cement)" / "JK Cement", or null. Used before a number is saved.
+  numberOwner(normalized, { exceptContact = null, exceptClient = null } = {}) {
+    for (const person of this.#contacts.values()) {
+      if (person.id !== exceptContact && person.phone === normalized) return `${person.name} (${this.#clients.get(person.client_id)?.name ?? 'a client'})`;
+    }
+    for (const client of this.#clients.values()) {
+      if (client.id !== exceptClient && client.phone === normalized) return client.name;
+    }
+    return null;
+  }
+
+  // Who is behind this number? -> { client, contact } or null. A call is matched with this (client = the pool's company, contact = the person).
+  matchNumber(normalized) {
+    if (!this.#phoneIndex) {
+      const index = new Map();
+      for (const client of this.#clients.values()) if (client.phone) index.set(client.phone, { client, contact: null });
+      for (const person of this.#contacts.values()) {
+        const client = this.#clients.get(person.client_id);
+        if (person.phone && client) index.set(person.phone, { client, contact: person }); // a person's own number beats the company's switchboard
+      }
+      this.#phoneIndex = index;
+    }
+    return this.#phoneIndex.get(normalized) ?? null;
+  }
+
+  // ---- positions (a shared dropdown list) ----------------------------------------------
+
+  // The names for the dropdown: what the office sent, what this phone added and has not sent yet, and the built-in ones.
+  get positions() {
+    const seen = new Map();
+    for (const name of [...PRESET_POSITIONS, ...this.#positions.names, ...this.#positions.pending]) {
+      const key = positionKey(name);
+      if (key && !seen.has(key)) seen.set(key, cleanPosition(name));
+    }
+    return [...seen.values()];
+  }
+
+  get pendingPositions() {
+    return [...this.#positions.pending];
+  }
+
+  async addPosition(name) {
+    check(rules.position(name));
+    const clean = cleanPosition(name);
+    await this.#learnPosition(clean);
+    this.#changed();
+    return clean;
+  }
+
+  // a new position goes to the office with the next sync
+  async #learnPosition(name) {
+    const key = positionKey(name);
+    if ([...PRESET_POSITIONS, ...this.#positions.names, ...this.#positions.pending].some((n) => positionKey(n) === key)) return;
+
+    this.#positions = { ...this.#positions, pending: [...this.#positions.pending, name] };
+    await this.#write(POSITIONS_KEY, this.#positions);
+  }
+
+  async setPositionsFromServer(names) {
+    const clean = [...new Set((Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && !rules.position(n)).map(cleanPosition))];
+    const known = new Set(clean.map(positionKey));
+
+    this.#positions = { names: clean, pending: this.#positions.pending.filter((n) => !known.has(positionKey(n))) };
+    await this.#write(POSITIONS_KEY, this.#positions);
+    this.#changed(false);
+  }
+
+  async clearPendingPositions(sent) {
+    const gone = new Set(sent.map(positionKey));
+    this.#positions = { names: [...this.#positions.names, ...this.#positions.pending.filter((n) => gone.has(positionKey(n)))], pending: this.#positions.pending.filter((n) => !gone.has(positionKey(n))) };
+    await this.#write(POSITIONS_KEY, this.#positions);
+  }
+
+  // ---- enquiries: what a client asked for, where it stands, when to follow up ----------------------
+
+  get enquiries() {
+    return [...this.#enquiries.values()];
+  }
+
+  enquiryById(id) {
+    return (id && this.#enquiries.get(id)) || null;
+  }
+
+  // The open enquiries that need the rep's action now (overdue, due today, or untouched), the most urgent first.
+  actionableEnquiries(now = new Date()) {
+    return this.enquiries.filter((e) => enquiryRules.needsAction(e, now)).sort((a, b) => enquiryRules.byUrgency(a, b, now));
+  }
+
+  /**
+   * input: { id?, client_id, client_name, contact_id, contact_name, status, items: [{ product, brands, quantity, budget_paise }],
+   *          next_followup_at (ISO|null), note }
+   * A note, or a change of status, is added to the enquiry's timeline with the time. Closing (won / lost) clears the follow-up.
+   */
+  async saveEnquiry(input) {
+    const items = (Array.isArray(input.items) ? input.items : []).map((i) => ({
+      product: String(i?.product ?? '').trim(),
+      brands: String(i?.brands ?? '').trim(),
+      quantity: i?.quantity === undefined || i?.quantity === '' || i?.quantity === null ? 1 : Number(i.quantity),
+      budget_paise: i?.budget_paise === undefined || i?.budget_paise === null || i?.budget_paise === '' ? null : Number(i.budget_paise),
+    }));
+    const note = String(input.note ?? '').trim();
+    const followup = input.next_followup_at ? Date.parse(input.next_followup_at) : null;
+
+    check(
+      rules.required(input.client_name, { min: 2, max: 150, label: 'Client name' }),
+      rules.optional(input.contact_name, { max: 150, label: 'Person' }),
+      enquiryRules.isStatus(input.status) ? null : 'Pick a status.',
+      items.length < 1 ? 'Add at least one product.' : items.length > enquiryRules.MAX_ITEMS ? `At most ${enquiryRules.MAX_ITEMS} products in one enquiry.` : null,
+      ...items.flatMap((i, n) => [
+        rules.required(i.product, { min: 2, max: 150, label: `Product ${n + 1}` }),
+        rules.optional(i.brands, { max: 150, label: `Brands of product ${n + 1}` }),
+        Number.isInteger(i.quantity) && i.quantity >= 1 && i.quantity <= 100_000 ? null : `Quantity of product ${n + 1} must be a whole number from 1 to 100000.`,
+        i.budget_paise === null || (Number.isInteger(i.budget_paise) && i.budget_paise >= 0 && i.budget_paise <= enquiryRules.MAX_BUDGET_PAISE) ? null : `The budget of product ${n + 1} is not valid.`,
+      ]),
+      rules.optional(note, { max: rules.MAX_TEXT * 2.5, label: 'Note' }),
+      followup !== null && Number.isNaN(followup) ? 'Pick a valid follow-up time.' : null,
+      followup !== null && followup > Date.now() + TWO_YEARS ? 'A follow-up can be at most 2 years ahead.' : null,
+    );
+
+    const id = input.id ?? crypto.randomUUID();
+    const old = this.#enquiries.get(id);
+    const now = nowIso();
+    const closed = enquiryRules.CLOSED.includes(input.status);
+
+    const timeline = [...(old?.timeline ?? [])];
+    if (!old) timeline.push({ at: now, text: note || 'Enquiry opened', status: input.status });
+    else if (input.status !== old.status) timeline.push({ at: now, text: note, status: input.status });
+    else if (note) timeline.push({ at: now, text: note, status: null });
+
+    const record = {
+      id,
+      client_id: input.client_id ?? null,
+      client_name: input.client_name.trim(),
+      contact_id: input.contact_id ?? null,
+      contact_name: String(input.contact_name ?? '').trim(),
+      status: input.status,
+      items,
+      opened_at: old?.opened_at ?? now,
+      next_followup_at: closed || followup === null ? null : new Date(followup).toISOString(),
+      closed_at: closed ? (old?.status === input.status && old.closed_at ? old.closed_at : now) : null,
+      timeline: timeline.slice(-enquiryRules.MAX_TIMELINE),
+      synced: false,
+      sync_error: null,
+      created_at: old?.created_at ?? now,
+      updated_at: now,
+    };
+
+    await this.#write(PREFIX.enquiry + id, record);
+    this.#enquiries.set(id, record);
+    this.#changed();
+    return record;
+  }
+
+  async deleteEnquiry(id) {
+    await this.#persist.del(PREFIX.enquiry + id);
+    this.#enquiries.delete(id);
+    await this.#remember('enquiry', id);
+    this.#changed();
+  }
+
+  // ---- daily reports: one per day, written by the rep ----------------------------------------------
+
+  // Newest day first.
+  get reports() {
+    return [...this.#reports.values()].sort((a, b) => b.report_date.localeCompare(a.report_date));
+  }
+
+  reportFor(day) {
+    return [...this.#reports.values()].find((r) => r.report_date === day) ?? null;
+  }
+
+  /**
+   * input: { id (the same id every time for one day: see core/ids.js), report_date 'YYYY-MM-DD', notes, tomorrow_plan, issues,
+   *          figures {calls, calls_missed, talk_seconds, meetings, enquiries_new, enquiries_worked, expenses_paise}, submit }
+   */
+  async saveReport(input) {
+    const day = String(input.report_date ?? '');
+    const at = /^\d{4}-\d{2}-\d{2}$/.test(day) ? Date.parse(`${day}T00:00:00`) : NaN;
+    const figures = {};
+    for (const key of ['calls', 'calls_missed', 'talk_seconds', 'meetings', 'enquiries_new', 'enquiries_worked', 'expenses_paise']) {
+      const n = Number(input.figures?.[key] ?? 0);
+      figures[key] = Number.isFinite(n) && n >= 0 ? Math.min(Math.round(n), 1_000_000_000_000) : 0;
+    }
+
+    check(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.id ?? '') ? null : 'The report has no valid id.',
+      Number.isNaN(at) ? 'Pick the day of the report.' : null,
+      at > Date.now() + 86_400_000 ? 'A report cannot be for a day that has not come.' : null,
+      at < Date.now() - 31 * 86_400_000 ? 'A report can only be for the last 31 days.' : null,
+      rules.optional(input.notes, { max: rules.MAX_LONG_TEXT, label: 'What happened' }),
+      rules.optional(input.tomorrow_plan, { max: rules.MAX_NOTE, label: 'Plan for tomorrow' }),
+      rules.optional(input.issues, { max: rules.MAX_NOTE, label: 'Needs help with' }),
+    );
+
+    const id = this.reportFor(day)?.id ?? input.id; // one report per day, whatever id was asked for
+    const old = this.#reports.get(id);
+    const now = nowIso();
+
+    const record = {
+      id,
+      report_date: day,
+      notes: String(input.notes ?? '').trim(),
+      tomorrow_plan: String(input.tomorrow_plan ?? '').trim(),
+      issues: String(input.issues ?? '').trim(),
+      figures,
+      submitted_at: input.submit ? (old?.submitted_at ?? now) : (old?.submitted_at ?? null),
+      synced: false,
+      sync_error: null,
+      created_at: old?.created_at ?? now,
+      updated_at: now,
+    };
+
+    await this.#write(PREFIX.report + id, record);
+    this.#reports.set(id, record);
+    this.#changed();
+    return record;
+  }
+
+  // ---- calls (matched to a number of the pool; the phone's other calls are never stored) -----------
+
+  // Newest first.
+  get calls() {
+    return [...this.#calls.values()].sort((a, b) => b.started_at.localeCompare(a.started_at));
+  }
+
+  callsOf(clientId) {
+    return this.calls.filter((c) => c.client_id === clientId);
+  }
+
+  hasCall(id) {
+    return this.#calls.has(id);
+  }
+
+  // Saves calls the matcher found (src/calls/matcher.js). A call that is already known is skipped: importing twice is harmless.
+  // Returns how many were new.
+  async saveCalls(list) {
+    let added = 0;
+
+    for (const input of list) {
+      check(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.id ?? '') ? null : 'The call has no valid id.',
+        ['incoming', 'outgoing', 'missed'].includes(input.direction) ? null : 'The call has no direction.',
+        /^\+[0-9]{8,15}$/.test(input.number ?? '') ? null : 'The call has no valid number.',
+        Number.isNaN(Date.parse(input.started_at)) ? 'The call has no time.' : null,
+        Number.isInteger(input.duration_seconds) && input.duration_seconds >= 0 && input.duration_seconds <= 86_400 ? null : 'The call length is not valid.',
+      );
+      if (this.#calls.has(input.id)) continue;
+
+      const record = {
+        id: input.id,
+        direction: input.direction,
+        number: input.number,
+        client_id: input.client_id ?? null,
+        contact_id: input.contact_id ?? null,
+        client_name: String(input.client_name ?? '').slice(0, 150),
+        contact_name: String(input.contact_name ?? '').slice(0, 150),
+        started_at: new Date(input.started_at).toISOString(),
+        duration_seconds: input.duration_seconds,
+        synced: false,
+        sync_error: null,
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      };
+
+      await this.#write(PREFIX.call + record.id, record);
+      this.#calls.set(record.id, record);
+      added++;
+    }
+
+    if (added) this.#changed();
+    return added;
+  }
+
+  // ---- settings of this phone (not shared) -----------------------------------------------
+
+  get prefs() {
+    return { ...this.#prefs };
+  }
+
+  async savePrefs(patch) {
+    this.#prefs = { ...this.#prefs, ...patch };
+    await this.#write(PREFS_KEY, this.#prefs);
+    this.#changed(false);
+  }
+
+  // Switching to another rep: everything this phone holds is erased (the PIN stays). Only meant to be used once the office has the
+  // records (or the person said they may go); the app checks that first.
+  async wipeEverything() {
+    for (const prefix of Object.values(PREFIX)) {
+      for (const slot of await this.#persist.keys(prefix)) await this.#persist.del(slot);
+    }
+    for (const slot of [PROFILE_KEY, SYNC_KEY, PREFS_KEY, POSITIONS_KEY]) await this.#persist.del(slot);
+
+    for (const kind of KINDS) this.#map(kind).clear();
+    this.#tombs.clear();
+    this.#profile = null;
+    this.#sync = null;
+    this.#prefs = {};
+    this.#positions = { names: [], pending: [] };
+    this.#phoneIndex = null;
+    this.#changed(false);
   }
 
   // ---- meetings --------------------------------------------------------------
@@ -277,6 +704,7 @@ export class Store {
       rules.optional(input.discussion, { max: rules.MAX_LONG_TEXT, label: 'Discussion' }),
       rules.optional(input.outcome, { max: rules.MAX_TEXT, label: 'Outcome' }),
       followup !== null && (Number.isNaN(followup) || followup < at) ? 'Follow-up must be after the meeting.' : null,
+      followup !== null && followup > Date.now() + TWO_YEARS ? 'A follow-up can be at most 2 years ahead.' : null,
     );
 
     const id = input.id ?? crypto.randomUUID();
@@ -285,6 +713,8 @@ export class Store {
       id,
       client_id: input.client_id ?? null,
       client_name: input.client_name.trim(),
+      // the people met: only ids (the people themselves are in the pool), at most 20, no repeats
+      contact_ids: [...new Set((input.contact_ids ?? []).filter((c) => typeof c === 'string'))].slice(0, MAX_PEOPLE_PER_MEETING),
       meeting_at: new Date(at).toISOString(),
       purpose: String(input.purpose ?? '').trim(),
       discussion: String(input.discussion ?? '').trim(),
@@ -322,7 +752,7 @@ export class Store {
   }
 
   #map(kind) {
-    return { expense: this.#expenses, client: this.#clients, meeting: this.#meetings }[kind];
+    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, enquiry: this.#enquiries, call: this.#calls, report: this.#reports }[kind];
   }
 
   getRecord(kind, id) {
@@ -376,6 +806,7 @@ export class Store {
     await this.#persist.del(PREFIX[kind] + id);
     if (kind === 'expense') await this.#persist.del(PREFIX.bill + id);
     this.#map(kind).delete(id);
+    if (kind === 'client' || kind === 'contact') this.#phoneIndex = null;
     this.#changed(false);
   }
 
@@ -391,7 +822,7 @@ export class Store {
 
   // How many changes are still only on this phone: records not sent yet, and deletes the office has not heard of.
   get unsyncedCount() {
-    return KINDS.reduce((sum, kind) => sum + this.dirty(kind).length, 0) + this.#tombs.size;
+    return KINDS.reduce((sum, kind) => sum + this.dirty(kind).length, 0) + this.#tombs.size + this.#positions.pending.length;
   }
 
   // Records the office refused (they break one of its rules).
@@ -410,7 +841,11 @@ export class Store {
       rep: this.profile,
       expenses: this.expenses.map(strip),
       clients: this.clients.map(strip),
+      contacts: this.contacts.map(strip),
       meetings: this.meetings.map(strip),
+      enquiries: this.enquiries.map(strip),
+      calls: this.calls.map(strip),
+      reports: this.reports.map(strip),
     };
   }
 
@@ -425,6 +860,7 @@ export class Store {
   async #put(kind, record) {
     await this.#write(PREFIX[kind] + record.id, record);
     this.#map(kind).set(record.id, record);
+    if (kind === 'client' || kind === 'contact') this.#phoneIndex = null;
     this.#changed(false);
   }
 

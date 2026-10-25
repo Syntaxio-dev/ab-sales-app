@@ -73,3 +73,30 @@ test('nothing personal is written to the console', () => {
 test('the PIN and keys never go into the data store or the logs', () => {
   assert.deepEqual(offenders(/persist\.set\([^)]*\bpin\b/i), []);
 });
+
+// ---- call matching (the phone's call history) ----
+
+test('the call history is reached only through the platform file, and the raw rows are never stored or sent as they are', () => {
+  // only platform/native.js talks to the plugin; the rest of the app asks the platform object
+  assert.deepEqual(offenders(/registerPlugin|CallLogReader/, { except: ['platform/native.js'] }), []);
+
+  // a raw call-log row (data from the phone's history) is turned into a record only in matcher.js, which keeps pool numbers only
+  // (any spelling: through an alias too)
+  assert.deepEqual(offenders(/\brecent\(\s*\{\s*sinceMs/, { except: ['app.js', 'platform/native.js', 'platform/web.js'] }), []);
+});
+
+test('call matching is opt-in: nothing is read unless the person turned it on', () => {
+  const app = strip(readFileSync(join(SRC, 'app.js'), 'utf8'));
+  assert.match(app, /prefs\.call_matching !== true/);
+});
+
+test('the manifest asks for the internet and the call history, nothing else of its own', () => {
+  const manifest = readFileSync(new URL('../android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  const permissions = [...manifest.matchAll(/<uses-permission android:name="([^"]+)"/g)].map((m) => m[1]).sort();
+  assert.deepEqual(permissions, ['android.permission.INTERNET', 'android.permission.READ_CALL_LOG']);
+});
+
+test('the native call-history reader only reads', () => {
+  const java = readFileSync(new URL('../android/app/src/main/java/com/agarwalbrothers/sales/CallLogReaderPlugin.java', import.meta.url), 'utf8');
+  assert.doesNotMatch(java, /\.insert\(|\.delete\(|\.update\(|WRITE_CALL_LOG|CALL_PHONE|READ_SMS/);
+});

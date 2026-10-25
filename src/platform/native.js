@@ -1,4 +1,5 @@
 import { SecureStorage } from '@aparajita/capacitor-secure-storage';
+import { registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
@@ -9,6 +10,9 @@ import { fromBase64 } from '../security/crypto.js';
 
 // The phone: the Android Keystore backed secret store, SQLite for the (already encrypted) records,
 // the system camera / photo picker, and the system share sheet.
+
+// our own small plugin (android/.../CallLogReaderPlugin.java): reads the call history after the person allowed it
+const CallLogReader = registerPlugin('CallLogReader');
 
 const DB = 'absales';
 const EXPORT_DIR = 'exports';
@@ -80,6 +84,20 @@ export async function createNativePlatform() {
     native: true,
     secrets,
     persist,
+
+    // The call history, read only. state: 'granted' | 'denied' | 'prompt'. recent() gives [{ number, type, date (ms), duration (s) }].
+    callLog: {
+      available: true,
+      async status() {
+        return (await CallLogReader.status()).state;
+      },
+      async request() {
+        return (await CallLogReader.request()).state;
+      },
+      async recent({ sinceMs, limit }) {
+        return (await CallLogReader.recent({ sinceMs, limit })).calls ?? [];
+      },
+    },
 
     // source: 'camera' | 'gallery' -> Uint8Array of a JPEG, or null when the person cancelled
     async pickPhoto(source) {

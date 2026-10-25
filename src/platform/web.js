@@ -27,6 +27,20 @@ export async function createWebPlatform() {
     secrets: new LocalSecrets(),
     persist: new LocalStoragePersist(),
 
+    // The browser has no call history. For looking at the screens only, a test page may put sample rows in globalThis.__AB_FAKE_CALLS__.
+    callLog: {
+      available: true,
+      async status() {
+        return globalThis.__AB_FAKE_CALLS__ ? 'granted' : 'denied';
+      },
+      async request() {
+        return globalThis.__AB_FAKE_CALLS__ ? 'granted' : 'denied';
+      },
+      async recent({ sinceMs, limit }) {
+        return (globalThis.__AB_FAKE_CALLS__ ?? []).filter((c) => c.date > sinceMs).slice(0, limit);
+      },
+    },
+
     pickPhoto(source) {
       return new Promise((resolve) => {
         const input = document.createElement('input');

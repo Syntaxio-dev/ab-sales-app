@@ -3,6 +3,7 @@ import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
 import { capitalize, dayString, formatDay, fromLocalInput, rupees, toLocalInput } from './format.js';
 import { chipGroup, confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
+import { openContactForm } from './people.js';
 
 const TOMORROW = () => new Date(Date.now() + 86_400_000);
 
@@ -169,10 +170,12 @@ export function openExpenseForm(app, existing = null) {
 export function openClientForm(app, existing = null) {
   const store = app.store;
 
-  const name = field('Name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: existing?.name ?? '' }));
-  const company = field('Company (optional)', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: existing?.company ?? '' }));
-  const phone = field('Phone (optional)', h('input', { class: 'input', type: 'tel', maxLength: 20, autocomplete: 'off', placeholder: '98765 43210', value: existing?.phone ?? '' }));
-  const city = field('City (optional)', h('input', { class: 'input', type: 'text', maxLength: 100, autocomplete: 'off', autocapitalize: 'words', value: existing?.city ?? '' }));
+  const name = field('Client name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', placeholder: 'For example JK Cement', value: existing?.name ?? '' }), 'The company or customer. Add the people who work there on the next screen.');
+  // "company" is the old way of writing the same thing: only shown for a client that already has one
+  const company = field('Group / company (optional)', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: existing?.company ?? '' }));
+  const phone = field('Main number (optional)', h('input', { class: 'input', type: 'tel', maxLength: 20, autocomplete: 'off', placeholder: '98765 43210', value: existing?.phone ?? '' }), 'For example the office board number.');
+  const city = field('Place (optional)', h('input', { class: 'input', type: 'text', maxLength: 100, autocomplete: 'off', autocapitalize: 'words', placeholder: 'Town or city', value: existing?.city ?? '' }), 'The team can filter clients by place.');
+  company.el.hidden = !existing?.company;
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 4, value: existing?.notes ?? '' }));
 
   const save = saveButton('Save client');
@@ -186,44 +189,52 @@ export function openClientForm(app, existing = null) {
     ]);
     if (!ok) return;
 
-    const done = await submit(save, () => store.saveClient({
-      id: existing?.id,
-      name: name.input.value,
-      company: company.input.value,
-      phone: phone.input.value,
-      city: city.input.value,
-      notes: notes.input.value,
-    }));
-    if (done) page.close();
+    let saved = null;
+    const done = await submit(save, async () => {
+      saved = await store.saveClient({
+        id: existing?.id,
+        name: name.input.value,
+        company: company.input.value,
+        phone: phone.input.value,
+        city: city.input.value,
+        notes: notes.input.value,
+      });
+    });
+    if (!done) return;
+
+    page.close();
+    if (!existing) openContactForm(app, { client: saved }); // a new client: straight on to the first person at it
   });
 
   const page = openPage({
     title: existing ? 'Edit client' : 'New client',
     body: h('div', { class: 'stack' },
       name.el, company.el, phone.el, city.el, notes.el,
-      existing ? deleteButton('Delete client', async () => {
-        if (await confirmDialog({ title: `Delete ${existing.name}?`, text: 'Old meetings keep the name. This cannot be undone.' })) {
+      existing && store.canDelete(existing) ? deleteButton('Delete client', async () => {
+        if (await confirmDialog({ title: `Delete ${existing.name}?`, text: 'The client and the people saved under it leave the pool for the whole team. Old meetings keep the name. This cannot be undone.' })) {
           await store.deleteClient(existing.id);
           page.close();
         }
-      }) : null),
+      }) : null,
+      existing && !store.canDelete(existing) ? h('p', { class: 'muted small' }, `Added by ${existing.created_by_name ?? existing.created_by_code}. Only they, or your manager, can delete this client. You can still correct the details.`) : null),
     footer: save,
   });
 }
 
 // ---- meeting -----------------------------------------------------------------
 
-export function openMeetingForm(app, existing = null) {
+export function openMeetingForm(app, existing = null, preset = {}) {
   const store = app.store;
   const OTHER = '__other__';
   const clients = store.clients;
-  const known = existing?.client_id && clients.some((c) => c.id === existing.client_id);
+  const wanted = existing?.client_id ?? preset.client_id ?? null;
+  const known = wanted && clients.some((c) => c.id === wanted);
 
   // With saved clients the box starts on "Choose a client" (never silently on "someone else"); without any it goes straight to typing.
-  const startOn = known ? existing.client_id : existing || !clients.length ? OTHER : '';
+  const startOn = known ? wanted : existing || !clients.length ? OTHER : '';
   const client = field('Client', h('select', { class: 'input' },
     clients.length && !known && !existing ? h('option', { value: '', selected: startOn === '' }, 'Choose a client') : null,
-    clients.map((c) => h('option', { value: c.id, selected: known && c.id === existing.client_id }, c.company ? `${c.name} (${c.company})` : c.name)),
+    clients.map((c) => h('option', { value: c.id, selected: known && c.id === wanted }, c.city ? `${c.name} (${c.city})` : c.name)),
     h('option', { value: OTHER, selected: startOn === OTHER }, 'Someone else (type the name)')));
   const typed = field('Client name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: known ? '' : existing?.client_name ?? '' }));
   const when = field('When', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(TOMORROW()), value: toLocalInput(existing ? new Date(existing.meeting_at) : new Date()) }), null, 'row');
@@ -233,7 +244,47 @@ export function openMeetingForm(app, existing = null) {
   const followup = field('Follow-up (optional)', h('input', { class: 'input', type: 'datetime-local', value: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '' }), null, 'row');
   const clearFollowup = h('button', { class: 'link', onclick: () => { followup.input.value = ''; } }, 'Remove follow-up');
 
-  const syncTyped = () => { typed.el.hidden = client.input.value !== OTHER; };
+  // the people met: chips of the people saved at the chosen client, plus a way to add one on the spot
+  const met = new Set((existing?.contact_ids ?? []).filter((id) => store.contactById(id)));
+  const people = h('div', { class: 'stack' });
+
+  const drawPeople = () => {
+    const chosenClient = client.input.value === OTHER ? null : store.clientById(client.input.value);
+    if (!chosenClient) {
+      people.replaceChildren();
+      return;
+    }
+
+    const list = store.contactsOf(chosenClient.id);
+    for (const id of [...met]) if (!list.some((p) => p.id === id)) met.delete(id); // a person of another client was selected before
+
+    people.replaceChildren(
+      h('p', { class: 'eyebrow' }, 'People you met (optional)'),
+      list.length
+        ? h('div', { class: 'people' }, list.map((p) => h('button', {
+          type: 'button',
+          class: 'filter',
+          'aria-pressed': String(met.has(p.id)),
+          onclick() {
+            if (met.has(p.id)) met.delete(p.id);
+            else met.add(p.id);
+            drawPeople();
+          },
+        }, p.position ? `${p.name} · ${p.position}` : p.name)))
+        : h('p', { class: 'muted small' }, 'Nobody is saved at this client yet.'),
+      h('button', {
+        type: 'button',
+        class: 'link',
+        style: { textAlign: 'left', padding: '4px 0' },
+        onclick: () => openContactForm(app, { client: chosenClient, onSaved: (person) => { met.add(person.id); drawPeople(); } }),
+      }, '+ Add a person I met'),
+    );
+  };
+
+  const syncTyped = () => {
+    typed.el.hidden = client.input.value !== OTHER;
+    drawPeople();
+  };
   client.input.addEventListener('change', () => {
     syncTyped();
     client.setError(null);
@@ -263,6 +314,7 @@ export function openMeetingForm(app, existing = null) {
       id: existing?.id,
       client_id: chosen?.id ?? null,
       client_name: clientName,
+      contact_ids: chosen ? [...met] : [],
       meeting_at: meetingAt.toISOString(),
       purpose: purpose.input.value,
       discussion: discussion.input.value,
@@ -275,7 +327,7 @@ export function openMeetingForm(app, existing = null) {
   const page = openPage({
     title: existing ? 'Edit meeting' : 'New meeting',
     body: h('div', { class: 'stack' },
-      client.el, typed.el, when.el, purpose.el, discussion.el, outcome.el, followup.el, clearFollowup,
+      client.el, typed.el, people, when.el, purpose.el, discussion.el, outcome.el, followup.el, clearFollowup,
       existing ? deleteButton('Delete meeting', async () => {
         if (await confirmDialog({ title: 'Delete this meeting?', text: `Meeting with ${existing.client_name} on ${formatDay(new Date(existing.meeting_at))}.` })) {
           await store.deleteMeeting(existing.id);

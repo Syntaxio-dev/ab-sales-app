@@ -1,7 +1,7 @@
 import { ValidationError } from '../data/store.js';
 import { SyncError } from '../sync/http.js';
 import { h, icon } from './dom.js';
-import { confirmDialog, field, openPage, toast, validate } from './kit.js';
+import { alertDialog, closeAll, confirmDialog, field, openPage, toast, validate } from './kit.js';
 
 // Everything about the link to the office: the card on Home, the sign-in page and the Settings group.
 // `app.sync` exists only while the app is unlocked AND an office server was configured when the app was built.
@@ -92,6 +92,11 @@ export function openConnect(app) {
     const waiting = app.store.unsyncedCount;
     const different = mine && mine.employee_code !== String(account.employee_code).toUpperCase();
 
+    if (different && holdsRecords(app.store)) {
+      await alertDialog(`This phone holds the records of ${mine.name}`, `You are signing in as ${account.name}. To use this phone for another rep, go to Settings > Switch to another rep first. That clears this phone and keeps everything the office already has.`);
+      return false;
+    }
+
     if (!different && !waiting) return true;
 
     return confirmDialog({
@@ -144,6 +149,40 @@ export function openConnect(app) {
   });
 }
 
+// Records of a person are on this phone (more than just the name typed at the start).
+// (the client pool is shared by the whole team, so it does not count: expenses, meetings, calls and anything not sent yet do)
+const holdsRecords = (store) => store.expenses.length + store.meetings.length + store.calls.length > 0 || store.unsyncedCount > 0;
+
+// ---- another rep on the same phone ---------------------------------------------------------------------
+
+// Sends what is waiting, then (after a clear question) erases this phone's records and signs out, ready for the next rep to sign in.
+// The PIN stays. What the office has comes back when the next rep signs in.
+export async function switchAccount(app) {
+  if (app.sync?.status.connected && app.store.unsyncedCount > 0) await app.sync.syncNow();
+
+  const left = app.store.unsyncedCount;
+  const ok = await confirmDialog({
+    title: 'Switch to another rep?',
+    text: left
+      ? `${left} ${left === 1 ? 'change' : 'changes'} could not be sent to the office (no network?). If you switch now they are LOST. Connect and sync first to keep them.`
+      : 'This phone is signed out and cleared for the next rep. Everything the office already has comes back for whoever signs in. Your PIN stays.',
+    yes: left ? 'Switch and lose them' : 'Switch',
+    danger: left > 0,
+  });
+  if (!ok) return;
+
+  try {
+    await app.switchAccount({ discard: left > 0 });
+  } catch (error) {
+    toast(error instanceof ValidationError ? error.message : 'Could not switch. Please try again.');
+    return;
+  }
+
+  closeAll();
+  toast('Ready for the next rep');
+  openConnect(app);
+}
+
 // ---- the Settings group ------------------------------------------------------------------------------
 
 export function officeSettings(app, onCleanup) {
@@ -165,7 +204,10 @@ export function officeSettings(app, onCleanup) {
     const s = sync.status;
 
     if (!s.connected) {
-      box.replaceChildren(row('share', s.needsSignIn ? 'Sign in to the office' : 'Connect to office', s.lastError ?? 'Send your records to your manager.', () => openConnect(app)));
+      box.replaceChildren(
+        row('share', s.needsSignIn ? 'Sign in to the office' : 'Connect to office', s.lastError ?? 'Send your records to your manager.', () => openConnect(app)),
+        row('swap', 'Switch to another rep', 'Clears this phone for the next rep.', () => switchAccount(app)),
+      );
       return;
     }
 
@@ -174,6 +216,7 @@ export function officeSettings(app, onCleanup) {
         h('span', { class: 'avatar' }, (s.account?.name ?? '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('')),
         h('span', { class: 'grow' }, h('span', { class: 'title' }, s.account?.name ?? 'Connected'), h('span', { class: 'sub' }, `${s.account?.employee_code ?? ''} · synced ${ago(s.lastSyncAt)}`))),
       row('share', s.busy ? 'Syncing...' : 'Sync now', s.lastError ?? (s.pending ? `${plural(s.pending, 'change', 'changes')} waiting` : 'Everything is with the office'), () => sync.syncNow()),
+      row('swap', 'Switch to another rep', 'Clears this phone for the next rep.', () => switchAccount(app)),
       row('lock', 'Sign out of the office', 'Your records stay on this phone.', async () => {
         const ok = await confirmDialog({
           title: 'Sign out of the office?',

@@ -1,25 +1,16 @@
+import { openClientPage } from './clients.js';
+import { needsActionCard } from './enquiries.js';
+import { reportCard } from './report.js';
 import { h, icon, svg } from './dom.js';
 import { openClientForm, openExpenseForm, openMeetingForm } from './forms.js';
 import { capitalize, dayLabel, dayString, formatDay, formatDayTime, formatHeadDay, formatTime, initials, parseDay, rupees, sameDay, splitRupees } from './format.js';
 import { officeCard } from './office.js';
+import { empty, fill, head } from './parts.js';
 import { openSettings } from './settings.js';
 
 // The four main screens. Each one fills the scrolling view; `ctx` gives them goTab(id) and fab(label, onclick).
 
 const CATEGORY_ICON = { travel: 'car', food: 'utensils', lodging: 'bed', fuel: 'fuel', other: 'receipt' };
-
-// replaceChildren() would print the word "null" for an empty part: this skips them
-const fill = (el, ...parts) => el.replaceChildren(...parts.filter(Boolean));
-
-const empty = (iconName, title, text) =>
-  h('div', { class: 'empty' }, icon(iconName, 52), h('h2', null, title), h('p', null, text));
-
-// Large title row: small mono eyebrow, Sora title, optional things on the right.
-function head({ eyebrow, title, right }) {
-  return h('header', { class: 'head' },
-    h('div', { class: 'grow' }, eyebrow ? h('p', { class: 'eyebrow' }, eyebrow) : null, h('h1', null, title)),
-    right ? h('div', { class: 'head-right' }, right) : null);
-}
 
 const statusChip = (status) => h('span', { class: `chip ${status === 'approved' || status === 'rejected' ? status : ''}` }, capitalize(status));
 
@@ -109,9 +100,13 @@ export function renderHome(container, app, ctx) {
         h('div', { class: 'num' }, String(store.unsyncedCount)),
         h('div', { class: 'hint' }, app.sync?.status.connected ? 'Waiting for the office' : 'Saved on this phone'))),
 
+    needsActionCard(app, ctx),
+
+    reportCard(app),
+
     h('div', null,
       h('div', { class: 'section-head', style: { marginBottom: '10px' } },
-        h('p', { class: 'eyebrow' }, 'Follow-ups'),
+        h('p', { class: 'eyebrow' }, 'Meeting follow-ups'),
         h('button', { class: 'link', onclick: () => ctx.goTab('meetings') }, 'View all')),
       followups.length
         ? h('div', { class: 'list' }, followups.map((m) => meetingRow(app, m)))
@@ -173,25 +168,66 @@ export function renderExpenses(container, app, ctx) {
 // ---- Clients -----------------------------------------------------------------
 
 let clientQuery = '';
+let clientScope = 'all'; // 'all' | 'mine'
+let clientPlace = '';
+
+// The search words and filters of the screens are kept while the app is open; when another rep (or the same one, after a lock) comes in
+// they start fresh.
+export function resetTabViews() {
+  clientQuery = '';
+  clientScope = 'all';
+  clientPlace = '';
+  expenseFilter = 'all';
+}
 
 export function renderClients(container, app, ctx) {
-  const all = app.store.clients;
+  const store = app.store;
+  const all = store.clients;
+  const me = store.profile?.employee_code;
   const list = h('div', { class: 'list' });
+  const filters = h('div', { class: 'filters', role: 'group', 'aria-label': 'Whose clients' });
+
+  // how many people are saved at each client (one pass)
+  const people = new Map();
+  for (const p of store.contacts) people.set(p.client_id, (people.get(p.client_id) ?? 0) + 1);
+
+  const places = [...new Set(all.map((c) => c.city).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  if (clientPlace && !places.includes(clientPlace)) clientPlace = '';
+
+  const placeSelect = h('select', { class: 'input', 'aria-label': 'Filter by place' },
+    h('option', { value: '' }, 'All places'),
+    ...places.map((p) => h('option', { value: p }, p)));
+  placeSelect.value = clientPlace;
+  placeSelect.addEventListener('change', () => {
+    clientPlace = placeSelect.value;
+    draw();
+  });
 
   const draw = () => {
+    filters.replaceChildren(...[['all', 'All clients'], ['mine', 'Mine']].map(([value, label]) => h('button', {
+      class: 'filter', 'aria-pressed': String(value === clientScope),
+      onclick() {
+        clientScope = value;
+        draw();
+      },
+    }, label)));
+
     const q = clientQuery.trim().toLowerCase();
-    const shown = q ? all.filter((c) => `${c.name} ${c.company} ${c.city} ${c.phone}`.toLowerCase().includes(q)) : all;
+    const shown = all.filter((c) => (clientScope === 'all' || (me && c.assigned_to_code === me))
+      && (!clientPlace || c.city === clientPlace)
+      && (!q || `${c.name} ${c.company} ${c.city} ${c.phone}`.toLowerCase().includes(q)
+        || store.contactsOf(c.id).some((p) => `${p.name} ${p.phone} ${p.position}`.toLowerCase().includes(q))));
 
     list.replaceChildren(...(shown.length
-      ? shown.map((c) => h('button', { class: 'item', onclick: () => openClientForm(app, c) },
+      ? shown.map((c) => h('button', { class: 'item', onclick: () => openClientPage(app, c.id) },
           h('span', { class: 'avatar' }, initials(c.name)),
           h('span', { class: 'grow' },
             h('span', { class: 'title' }, c.name),
-            h('span', { class: 'sub' }, [c.company, c.city, c.phone].filter(Boolean).join(' · ') || 'No details yet'))))
-      : [empty('search', 'Nothing found', 'Try another name, company or city.')]));
+            h('span', { class: 'sub' }, [c.city, people.get(c.id) ? `${people.get(c.id)} ${people.get(c.id) === 1 ? 'person' : 'people'}` : 'No people yet', c.assigned_to_name && c.assigned_to_code !== me ? `Works with ${c.assigned_to_name}` : null].filter(Boolean).join(' · ')))))
+      : [empty('search', clientScope === 'mine' && !q && !clientPlace ? 'None given to you yet' : 'Nothing found', clientScope === 'mine' && !q && !clientPlace ? 'Clients your manager gives you, or that you add, show here.' : 'Try another name, person, number or place.')]));
   };
 
-  const search = h('input', { class: 'input', type: 'search', placeholder: 'Search clients', autocomplete: 'off', value: clientQuery, 'aria-label': 'Search clients' });
+  const search = h('input', { class: 'input', type: 'search', placeholder: 'Search clients, people or numbers', autocomplete: 'off', value: clientQuery, 'aria-label': 'Search clients' });
   search.addEventListener('input', () => {
     clientQuery = search.value;
     draw();
@@ -199,9 +235,11 @@ export function renderClients(container, app, ctx) {
 
   draw();
   fill(container,
-    head({ eyebrow: `${all.length} saved`, title: 'Clients' }),
+    head({ eyebrow: `${all.length} in the pool`, title: 'Clients' }),
+    all.length ? filters : null,
     all.length ? search : null,
-    all.length ? list : empty('users', 'No clients yet', 'Save the people and companies you meet. You can pick them when you write a meeting.'),
+    places.length > 1 ? placeSelect : null,
+    all.length ? list : empty('users', 'No clients yet', 'Save the companies you deal with and the people who work there. Everybody on the team sees them.'),
   );
   ctx.fab('Add client', () => openClientForm(app));
 }

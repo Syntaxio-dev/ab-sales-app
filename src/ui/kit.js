@@ -100,6 +100,9 @@ export function toast(text) {
 
 // ---- back button ------------------------------------------------------------
 
+// Is a page or dialog on top of the screen? (a swipe between tabs must not work then)
+export const hasOpen = () => stack.length > 0;
+
 // Closes the top dialog or page. Returns false when there was nothing open.
 export function closeTop() {
   const top = stack[stack.length - 1];

@@ -16,18 +16,36 @@ const PUSH_ROUNDS = 10;
 const PULL_PAGES = 30;
 const BILLS_PER_RUN = 15;
 
+// The order matters: a client is sent before the people at it. Calls are a log: they are sent, never deleted.
 export const KINDS = [
   { kind: 'expense', wire: 'expenses' },
   { kind: 'client', wire: 'clients' },
+  { kind: 'contact', wire: 'contacts' },
   { kind: 'meeting', wire: 'meetings' },
+  { kind: 'enquiry', wire: 'enquiries' },
+  { kind: 'call', wire: 'calls', log: true },
+  { kind: 'report', wire: 'reports', log: true },
 ];
 
 const wireOf = {
   expense: (r) => ({ uuid: r.id, category: r.category, amount_paise: r.amount_paise, expense_date: r.expense_date, note: r.note, has_bill: r.has_bill, updated_at: r.updated_at }),
   client: (r) => ({ uuid: r.id, name: r.name, company: r.company, phone: r.phone, city: r.city, notes: r.notes, updated_at: r.updated_at }),
+  contact: (r) => ({ uuid: r.id, client_uuid: r.client_id, name: r.name, position: r.position, phone: r.phone, email: r.email, notes: r.notes, updated_at: r.updated_at }),
   meeting: (r) => ({
-    uuid: r.id, client_uuid: r.client_id, client_name: r.client_name, meeting_at: r.meeting_at, purpose: r.purpose,
+    uuid: r.id, client_uuid: r.client_id, client_name: r.client_name, contact_uuids: r.contact_ids, meeting_at: r.meeting_at, purpose: r.purpose,
     discussion: r.discussion, outcome: r.outcome, next_followup_at: r.next_followup_at, updated_at: r.updated_at,
+  }),
+  enquiry: (r) => ({
+    uuid: r.id, client_uuid: r.client_id, client_name: r.client_name, contact_uuid: r.contact_id, contact_name: r.contact_name, status: r.status,
+    items: r.items, opened_at: r.opened_at, next_followup_at: r.next_followup_at, closed_at: r.closed_at, timeline: r.timeline, updated_at: r.updated_at,
+  }),
+  report: (r) => ({
+    uuid: r.id, report_date: r.report_date, notes: r.notes, tomorrow_plan: r.tomorrow_plan, issues: r.issues, figures: r.figures,
+    submitted_at: r.submitted_at, updated_at: r.updated_at,
+  }),
+  call: (r) => ({
+    uuid: r.id, direction: r.direction, number: r.number, client_uuid: r.client_id, contact_uuid: r.contact_id, client_name: r.client_name,
+    contact_name: r.contact_name, started_at: r.started_at, duration_seconds: r.duration_seconds, updated_at: r.updated_at,
   }),
 };
 
@@ -41,6 +59,8 @@ export class SyncEngine {
   #stopUser = null;
   #stopped = false;
   #lastRun = null;
+  #idle = Promise.resolve();
+  #idleDone = null;
 
   constructor({ store, http, appVersion = '', deviceModel = '', clock = () => new Date(), autoDelayMs = 4000 }) {
     this.autoDelayMs = autoDelayMs;
@@ -85,6 +105,11 @@ export class SyncEngine {
   start() {
     this.#stopped = false;
     this.#stopUser = this.#store.onUserChange(() => this.schedule());
+  }
+
+  // Resolves when no sync is running (a sync that was already on its way finishes first: it writes nothing once stop() was called).
+  whenIdle() {
+    return this.#idle;
   }
 
   stop() {
@@ -161,6 +186,7 @@ export class SyncEngine {
     }
 
     this.#busy = true;
+    this.#idle = new Promise((resolve) => (this.#idleDone = resolve));
     clearTimeout(this.#timer);
     this.#emit();
 
@@ -178,6 +204,7 @@ export class SyncEngine {
     } finally {
       this.#busy = false;
       this.#lastRun = summary;
+      this.#idleDone?.();
       this.#emit();
 
       if (this.#again && !this.#stopped) {
@@ -217,18 +244,29 @@ export class SyncEngine {
       const body = { app_version: this.appVersion, device_model: this.deviceModel, deleted: {} };
       let any = false;
 
-      for (const { kind, wire } of KINDS) {
+      for (const { kind, wire, log } of KINDS) {
         sent[kind] = this.#store.dirty(kind).slice(0, limit);
         body[wire] = sent[kind].map(wireOf[kind]);
-        const gone = this.#store.tombstones.filter((t) => t.kind === kind).slice(0, limit);
+        const gone = log ? [] : this.#store.tombstones.filter((t) => t.kind === kind).slice(0, limit);
         sent[`${kind}:deleted`] = gone;
-        body.deleted[wire] = gone.map((t) => t.id);
+        if (!log) body.deleted[wire] = gone.map((t) => t.id);
         any ||= sent[kind].length > 0 || gone.length > 0;
       }
+
+      // new positions typed on this phone join the shared list
+      const positions = this.#store.pendingPositions.slice(0, 50);
+      if (positions.length) body.positions = positions;
+      any ||= positions.length > 0;
       if (!any) return;
 
       const answer = await this.#http.post('/sync/push', body, { token: this.#token() });
       let progressed = 0;
+
+      if (positions.length) {
+        // accepted, duplicate or refused: either way the office has answered, so it is not sent again
+        await this.#store.clearPendingPositions(positions);
+        progressed++;
+      }
 
       for (const { kind, wire } of KINDS) {
         const results = new Map((answer.results?.[wire] ?? []).map((r) => [r.uuid, r]));
@@ -258,9 +296,9 @@ export class SyncEngine {
         for (const tomb of sent[`${kind}:deleted`]) {
           const result = deletes.get(tomb.id);
 
-          if (result?.status === 'accepted' || (result?.status === 'rejected' && ['LOCKED', 'INVALID'].includes(result.code))) {
+          if (result?.status === 'accepted' || (result?.status === 'rejected' && ['LOCKED', 'INVALID', 'NOT_ALLOWED'].includes(result.code))) {
             await this.#store.clearTombstone(kind, tomb.id);
-            if (result.code === 'LOCKED') summary.fullPull = true; // the office keeps it: bring it back
+            if (['LOCKED', 'NOT_ALLOWED'].includes(result.code)) summary.fullPull = true; // the office keeps it: bring it back
             progressed++;
           }
         }
@@ -318,10 +356,13 @@ export class SyncEngine {
   // ---- pull ---------------------------------------------------------------------------------------
 
   async #pull(summary) {
-    let since = summary.fullPull ? null : (this.#store.syncState?.cursor ?? null);
+    // A phone that was updated from a version without the shared client pool holds a cursor that is later than the pool's older rows:
+    // it asks for everything once ("pool_v2"), then goes on from the cursor.
+    let since = summary.fullPull || !this.#store.syncState?.pool_v2 ? null : (this.#store.syncState?.cursor ?? null);
 
     for (let page = 0; page < PULL_PAGES; page++) {
       const answer = await this.#http.get('/sync/pull', { token: this.#token(), query: since ? { since } : {} });
+      if (this.#stopped) return; // signed out or switched while the answer was on its way: it belongs to nobody now
       const deleting = new Set(this.#store.tombstones.map((t) => `${t.kind}:${t.id}`));
 
       for (const { kind, wire } of KINDS) {
@@ -330,16 +371,21 @@ export class SyncEngine {
         }
       }
 
+      if (Array.isArray(answer.positions)) await this.#store.setPositionsFromServer(answer.positions);
+
       since = typeof answer.cursor === 'string' ? answer.cursor : since;
       await this.#store.saveSyncState({ cursor: since });
 
-      if (answer.has_more !== true) return;
+      if (answer.has_more !== true) {
+        if (!this.#store.syncState?.pool_v2) await this.#store.saveSyncState({ pool_v2: true });
+        return;
+      }
     }
   }
 
   async #merge(kind, incoming, deleting) {
     const id = typeof incoming?.uuid === 'string' ? incoming.uuid : null;
-    if (!id || deleting.has(`${kind}:${id}`)) return false; // the person deleted it and the office has not heard yet
+    if (this.#stopped || !id || deleting.has(`${kind}:${id}`)) return false; // the person deleted it and the office has not heard yet
 
     const local = this.#store.getRecord(kind, id);
 

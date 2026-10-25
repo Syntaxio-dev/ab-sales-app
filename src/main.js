@@ -22,19 +22,24 @@ import { SyncEngine } from './sync/engine.js';
 import { createHttp } from './sync/http.js';
 import { renderLock, renderSetup } from './ui/auth.js';
 import { h, icon } from './ui/dom.js';
-import { closeAll, closeTop } from './ui/kit.js';
+import { closeAll, closeTop, hasOpen } from './ui/kit.js';
 import { applyTheme, watchSystemTheme } from './ui/theme.js';
-import { renderClients, renderExpenses, renderHome, renderMeetings } from './ui/tabs.js';
+import { renderCalls, resetCallsView } from './ui/calls.js';
+import { renderEnquiries, resetEnquiryView } from './ui/enquiries.js';
+import { renderClients, renderExpenses, renderHome, renderMeetings, resetTabViews } from './ui/tabs.js';
 
 // Before anything is drawn: the saved light / dark choice (public/theme-init.js already did it before the first paint).
 applyTheme();
 watchSystemTheme();
 
+// The order of the dock, and of the swipe: swipe left = the next tab, swipe right = the previous one.
 const TABS = [
   { id: 'home', label: 'Home', icon: 'home', render: renderHome },
-  { id: 'expenses', label: 'Expenses', icon: 'receipt', render: renderExpenses },
+  { id: 'enquiries', label: 'Enquiries', icon: 'clipboard', render: renderEnquiries },
   { id: 'clients', label: 'Clients', icon: 'users', render: renderClients },
+  { id: 'calls', label: 'Calls', icon: 'phone', render: renderCalls },
   { id: 'meetings', label: 'Meetings', icon: 'calendar', render: renderMeetings },
+  { id: 'expenses', label: 'Expenses', icon: 'receipt', render: renderExpenses },
 ];
 
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
@@ -86,6 +91,9 @@ async function boot() {
     unsubscribeStore();
     unsubscribeStore = () => {};
     runCleanups();
+    resetTabViews();
+    resetEnquiryView();
+    resetCallsView();
     closeAll(); // no form or dialog may stay on screen while locked
 
     // the page container is (re)built each time, below the optional preview banner
@@ -108,34 +116,84 @@ async function boot() {
     const fabSlot = h('div', { class: 'fab-slot' });
 
     const ctx = {
-      goTab: (id) => {
+      goTab: (id, direction = null) => {
         tab = id;
-        draw(true);
+        draw(true, direction);
       },
       fab: (label, onclick) => fabSlot.replaceChildren(...(label ? [h('button', { class: 'btn primary fab-pill', onclick }, icon('plus', 18), label)] : [])),
       onCleanup: (fn) => cleanups.push(fn),
     };
 
     // animate: the screen fades up (only when the person changes tab, not when a saved record redraws the list)
-    function draw(animate) {
+    function draw(animate, direction = null) {
       const current = TABS.find((t) => t.id === tab);
       const keepScroll = animate ? 0 : view.scrollTop;
 
-      view.classList.remove('reveal');
+      view.classList.remove('reveal', 'from-next', 'from-prev');
       runCleanups();
       current.render(view, app, ctx);
       view.scrollTop = keepScroll;
-      if (animate) view.classList.add('reveal');
+      if (animate) {
+        void view.offsetWidth; // restart the animation
+        view.classList.add('reveal');
+        if (direction) view.classList.add(direction === 'next' ? 'from-next' : 'from-prev');
+      }
 
-      dock.replaceChildren(...TABS.map((t) => h('button', { class: 'tab', 'aria-current': t.id === tab ? 'page' : null, onclick: () => ctx.goTab(t.id) },
-        h('span', { class: 'pill' }, icon(t.icon, 22)), t.label)));
+      drawDock();
     }
+
+    // The dock, with a small number on the Enquiries tab: how many follow-ups wait for the rep. Its own function, because time passing
+    // (a follow-up that falls due) changes the number without any data changing.
+    function drawDock() {
+      const waiting = app.store.actionableEnquiries().length;
+
+      dock.replaceChildren(...TABS.map((t) => h('button', { class: 'tab', 'aria-current': t.id === tab ? 'page' : null, onclick: () => ctx.goTab(t.id, TABS.findIndex((x) => x.id === t.id) > TABS.findIndex((x) => x.id === tab) ? 'next' : 'prev') },
+        h('span', { class: 'pill' }, icon(t.icon, 22), t.id === 'enquiries' && waiting ? h('i', { class: 'badge', 'aria-label': `${waiting} need action` }, waiting > 9 ? '9+' : String(waiting)) : null), t.label)));
+    }
+
+    // Swipe left = next tab, swipe right = previous tab (like Prysm). Not over fields, filter rows or open pages, and not at the very
+    // edges of the screen (the phone's own back gesture lives there).
+    let touch = null;
+    view.addEventListener('touchstart', (event) => {
+      const t = event.touches[0];
+      const edge = 26;
+      const blocked = hasOpen() || event.touches.length > 1 || t.clientX < edge || t.clientX > window.innerWidth - edge
+        || event.target.closest?.('input, select, textarea, .filters, .people, .chips, .noswipe');
+      touch = blocked ? null : { x: t.clientX, y: t.clientY, at: Date.now() };
+    }, { passive: true });
+    view.addEventListener('touchend', (event) => {
+      if (!touch) return;
+      const t = event.changedTouches[0];
+      const dx = t.clientX - touch.x;
+      const dy = t.clientY - touch.y;
+      const quick = Date.now() - touch.at < 700;
+      touch = null;
+      if (hasOpen() || !quick || Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+
+      const next = TABS[TABS.findIndex((x) => x.id === tab) + (dx < 0 ? 1 : -1)];
+      if (next) ctx.goTab(next.id, dx < 0 ? 'next' : 'prev');
+    }, { passive: true });
 
     screen.append(h('div', { class: 'shell' }, view, fabSlot, dock));
     draw(true);
 
-    // a saved change redraws the list underneath (open forms are not touched)
-    unsubscribeStore = app.store.subscribe(() => draw(false));
+    // a saved change redraws the list underneath (open forms are not touched). While the rep is typing in a field of the screen itself
+    // (a search box) the redraw waits until the field is left: a sync finishing must not take the keyboard away.
+    let redrawLater = false;
+    const typing = () => view.contains(document.activeElement) && document.activeElement?.matches?.('input, textarea, select');
+    unsubscribeStore = app.store.subscribe(() => {
+      if (typing()) redrawLater = true;
+      else draw(false);
+    });
+    view.addEventListener('focusout', () => setTimeout(() => {
+      if (redrawLater && !typing()) {
+        redrawLater = false;
+        draw(false);
+      }
+    }, 250));
+
+    const clock = setInterval(drawDock, 60_000);
+    leaveScreen = () => clearInterval(clock);
   }
 
   app.subscribe(show);

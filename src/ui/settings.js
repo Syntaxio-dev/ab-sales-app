@@ -4,6 +4,7 @@ import { pinInput } from './auth.js';
 import { h, icon } from './dom.js';
 import { allJson, clientsCsv, expensesCsv, meetingsCsv } from './export.js';
 import { confirmDialog, dialog, openPage, toast } from './kit.js';
+import { askTurnOff, askTurnOn } from './calls.js';
 import { officeSettings } from './office.js';
 import { getChoice, setChoice } from './theme.js';
 
@@ -116,6 +117,23 @@ export function openSettings(app) {
     if (yes) await app.eraseEverything();
   }
 
+  // On / off for matching the call history with the clients (the Calls tab explains it)
+  function callMatchingCard() {
+    const card = h('div', { class: 'card' });
+
+    const draw = async () => {
+      const state = await app.callMatchingState();
+      card.replaceChildren(row('phone', 'Call matching', state === 'on' ? 'On: client calls show in the Calls tab.' : state === 'denied' ? 'Android did not allow it. Tap to try again.' : 'Off: your call history is not read.', async () => {
+        if (state === 'on') await askTurnOff(app);
+        else await askTurnOn(app);
+        draw();
+      }));
+    };
+
+    draw();
+    return card;
+  }
+
   openPage({
     title: 'Settings',
     onClose: () => cleanups.forEach((fn) => fn()),
@@ -127,6 +145,8 @@ export function openSettings(app) {
       appearance(),
 
       group('Office', officeSettings(app, (fn) => cleanups.push(fn))),
+
+      app.platform.callLog?.available ? group('Calls', callMatchingCard()) : null,
 
       group('Export', h('div', { class: 'card' },
         row('share', 'Expenses (CSV)', null, () => exportFile('expenses.csv', expensesCsv, 'text/csv')),
@@ -140,7 +160,7 @@ export function openSettings(app) {
 
       group('Privacy', h('div', { class: 'card pad muted small' },
         'This app saves your expenses, bill photos, clients and meetings on this phone only, encrypted and locked with your PIN. ',
-        'It does not read your calls, messages, contacts or location. Only after you connect to the office, it sends your expenses, bill photos, clients and meetings to the office over a secure connection, and nothing else. ',
+        'It does not read your messages, contacts or location. Your call history is read only if you turn on call matching, and then only calls with numbers saved in your clients are kept. Only after you connect to the office, it sends your expenses, bill photos, clients and meetings to the office over a secure connection, and nothing else. ',
         'The app locks itself after a minute in the background, and hides its screen in the recent-apps list.')),
 
       group('Danger zone', h('div', { class: 'card' }, row('trash', 'Erase all data', 'Deletes everything on this phone and starts again.', erase, { danger: true }))),

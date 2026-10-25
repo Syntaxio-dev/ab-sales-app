@@ -114,11 +114,12 @@ h1, h2, h3, .head-title { font-family: var(--font-head); letter-spacing: -0.02em
 
 .dock {
   position: absolute; left: 14px; right: 14px; bottom: calc(14px + var(--bottom)); z-index: 10; height: 66px;
-  display: grid; grid-template-columns: repeat(4, 1fr); align-items: center;
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; align-items: center;
   background: var(--surface); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--dock-shadow);
 }
-.tab { background: none; border: 0; padding: 4px 0; display: grid; justify-items: center; gap: 3px; font: 700 10.5px/1 var(--font-ui); color: var(--mute); }
-.tab .pill { padding: 5px 16px; border-radius: 14px; display: grid; }
+.tab { background: none; border: 0; padding: 4px 0; display: grid; justify-items: center; gap: 3px; font: 700 10px/1 var(--font-ui); color: var(--mute); min-width: 0; }
+.tab .badge { position: absolute; top: -2px; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--al-bg); color: var(--al-ink); box-shadow: 0 0 0 1.5px var(--surface); font: 700 10px/16px var(--font-ui); font-style: normal; text-align: center; }
+.tab .pill { position: relative; padding: 5px 10px; border-radius: 14px; display: grid; }
 .tab[aria-current='page'] { color: var(--ink); }
 .tab[aria-current='page'] .pill { background: var(--tint); color: var(--link); }
 
@@ -182,6 +183,8 @@ button.tile:active { background: var(--tint); }
 
 .chip { display: inline-flex; align-items: center; gap: 4px; font: 700 11.5px/1 var(--font-ui); padding: 5px 10px; border-radius: 20px; background: var(--mu-bg); color: var(--mute); white-space: nowrap; }
 .chip.approved { background: var(--ok-bg); color: var(--ok-ink); }
+.chip.today { background: var(--tint); color: var(--link); }
+.chip.lost { background: var(--mu-bg); color: var(--mute); }
 .chip.rejected, .chip.late { background: var(--al-bg); color: var(--al-ink); }
 
 .filters { display: flex; gap: 8px; overflow-x: auto; margin: 0 -18px; padding: 2px 18px; scrollbar-width: none; }
@@ -282,6 +285,10 @@ select.input { padding-right: 38px; background-image: linear-gradient(45deg, tra
 .reveal > *:nth-child(4) { animation-delay: 210ms; }
 .reveal > *:nth-child(n + 5) { animation-delay: 280ms; }
 
+.view.from-next { animation: slide-in-next 0.28s var(--ease) both; }
+.view.from-prev { animation: slide-in-prev 0.28s var(--ease) both; }
+@keyframes slide-in-next { from { transform: translateX(34px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@keyframes slide-in-prev { from { transform: translateX(-34px); opacity: 0.4; } to { transform: none; opacity: 1; } }
 @keyframes fade-up { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes pop { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: none; } }
@@ -305,3 +312,22 @@ select.input { padding-right: 38px; background-image: linear-gradient(45deg, tra
   #app { max-width: 520px; margin: 0 auto; border-inline: 1px solid var(--line); }
   .page { max-width: 520px; left: 50%; right: auto; width: 100%; transform: translateX(-50%); animation: none; }
 }
+
+/* ---- clients with people, calls (v2) ---- */
+.people { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter.with-icon { display: inline-flex; align-items: center; gap: 6px; }
+.item-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.call-btn { width: 42px; height: 42px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--tint); color: var(--link); border: 0; padding: 0; }
+.call-btn:active { background: var(--line); }
+a.call-btn { text-decoration: none; }
+.chip.missed { background: var(--al-bg); color: var(--al-ink); }
+.chip.incoming { background: var(--tint); color: var(--link); }
+.chip.outgoing { background: var(--ok-bg); color: var(--ok-ink); }
+.detail-line { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; }
+.detail-line .k { width: 92px; flex: none; color: var(--mute); font-size: 13px; }
+.detail-line .v { overflow-wrap: anywhere; font-weight: 600; }
+
+/* a sideways drag belongs to the app (it changes the tab), not to the browser's own back / forward swipe */
+html, body { overscroll-behavior-x: none; }
+.view { touch-action: pan-y pinch-zoom; }
+.filters, .people, .chips, .view textarea, .view input { touch-action: pan-x pan-y; }

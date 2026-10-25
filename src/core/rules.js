@@ -26,6 +26,15 @@ export function employeeCode(value) {
   return /^[A-Z0-9-]{3,30}$/.test(text) ? null : 'Use 3 to 30 letters, numbers or "-".';
 }
 
+// A position (job title) in the shared list: the office server uses the same pattern.
+export const POSITION_PATTERN = /^[\p{L}\p{N} &/().,'-]+$/u;
+
+export function position(value) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (text.length < 2 || text.length > 60) return 'A position is 2 to 60 letters or digits.';
+  return POSITION_PATTERN.test(text) ? null : 'Use letters, digits and & / ( ) . , - only.';
+}
+
 export function phone(value, requiredField = false) {
   const text = String(value ?? '').trim();
   if (!text) return requiredField ? 'Phone number is required.' : null;
