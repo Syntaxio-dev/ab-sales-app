@@ -1,6 +1,6 @@
 {
   "name": "ab-sales-app",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Agarwal Brothers field sales app (expenses, clients, meetings), offline Android APK",
   "type": "module",

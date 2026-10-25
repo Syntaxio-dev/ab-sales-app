@@ -204,7 +204,59 @@ export function cleanMeeting(r) {
   };
 }
 
-export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport };
+// ---- the product guide (read only on the phone) ----
+
+const lines = (value, maxItems, maxLength) => (Array.isArray(value)
+  ? value.filter((s) => typeof s === 'string').map((s) => s.trim().slice(0, maxLength)).filter(Boolean).slice(0, maxItems)
+  : []);
+
+export function cleanProduct(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const name = text(r.name, 200);
+  if (name.length < 2) return null;
+
+  const pairs = (value, max, keyA, keyB, lenA, lenB) => (Array.isArray(value)
+    ? value.map((v) => ({ [keyA]: text(v?.[keyA], lenA), [keyB]: text(v?.[keyB], lenB) })).slice(0, max)
+    : []);
+
+  return {
+    id: r.uuid,
+    name,
+    group: text(r.group, 100),
+    sort: Number.isInteger(r.sort) && r.sort >= 0 && r.sort <= 65_000 ? r.sort : 0,
+    premium_brands: lines(r.premium_brands, 30, 100),
+    economy_brands: lines(r.economy_brands, 30, 100),
+    lite_brands: lines(r.lite_brands, 30, 100),
+    summary: text(r.summary, 6000),
+    variants: pairs(r.variants, 20, 'name', 'text', 200, 2000).filter((v) => v.text),
+    industries: text(r.industries, 2000),
+    key_parameters: lines(r.key_parameters, 40, 1000),
+    short_term_problems: lines(r.short_term_problems, 40, 1000),
+    long_term_problems: lines(r.long_term_problems, 40, 1000),
+    top_brands: pairs(r.top_brands, 20, 'name', 'note', 150, 1000).filter((b) => b.name),
+  };
+}
+
+// The whole guide from the office -> { version, products } (a broken product is dropped, the rest is kept), or null when it is no guide at all.
+export function cleanGuide(answer) {
+  if (!answer || typeof answer.version !== 'string' || !Array.isArray(answer.products)) return null;
+
+  const seen = new Set();
+  const products = [];
+  for (const raw of answer.products.slice(0, 500)) {
+    const product = cleanProduct(raw);
+    if (product && !seen.has(product.id)) {
+      seen.add(product.id);
+      products.push(product);
+    }
+  }
+
+  return { version: answer.version.slice(0, 40), products };
+}
+
+// A request for a guide note only ever goes from the phone to the office: nothing comes back to be merged.
+export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null };
 
 // What to do with a record the office sent, given what the phone has:
 //  'create'  the phone does not have it (a new phone, or a restore)

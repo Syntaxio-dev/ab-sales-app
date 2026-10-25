@@ -26,8 +26,10 @@ export class App {
   unknownCalls = [];
   #callsBusy = false;
 
-  constructor({ vault, persist, platform, syncFactory = null, autoLockMs = AUTO_LOCK_MS, clock = () => Date.now() }) {
+  constructor({ vault, persist, platform, syncFactory = null, officeLogin = null, officeLogout = null, autoLockMs = AUTO_LOCK_MS, clock = () => Date.now() }) {
     this.syncFactory = syncFactory;
+    this.officeLogin = officeLogin;
+    this.officeLogout = officeLogout;
     this.vault = vault;
     this.persist = persist;
     this.platform = platform;
@@ -50,18 +52,54 @@ export class App {
     this.#set((await this.vault.isSetUp()) ? 'locked' : 'setup');
   }
 
-  // First start: make the keys and save the rep's name and code.
-  async setUp({ name, employeeCode, pin }) {
-    const error = rules.firstError(rules.pin(pin), rules.required(name, { min: 2, max: 100, label: 'Name' }), rules.employeeCode(employeeCode));
+  // ---- first start -------------------------------------------------------------------------------
+
+  // Nobody makes an account on the phone: the manager makes it on the website (name, number, employee code, password) and the rep
+  // signs in with that, once. This is that sign-in. It keeps the answer in memory only; nothing is stored until a PIN is chosen
+  // (setUp below). -> { token, expires_at, account: { name, employee_code, phone } }
+  async signInToOffice(login, password) {
+    if (typeof this.officeLogin !== 'function') throw new ValidationError('This copy of the app is not linked to the office. Ask your manager for the latest version.');
+
+    const code = String(login ?? '').trim();
+    if (!code) throw new ValidationError('Type the employee code (or phone number) your manager gave you.');
+    if (!password) throw new ValidationError('Type your password.');
+
+    const answer = await this.officeLogin(code, String(password));
+    const account = answer?.account;
+
+    // what the office answers is checked like everything else it sends
+    if (typeof answer?.token !== 'string' || !answer.token || typeof account?.name !== 'string' || rules.employeeCode(account?.employee_code)) {
+      throw new ValidationError('The office gave an answer this app does not understand. Please try again.');
+    }
+
+    return { token: answer.token, expires_at: answer.expires_at ?? null, account: { name: account.name, employee_code: String(account.employee_code).toUpperCase(), phone: account.phone ?? null } };
+  }
+
+  // The rep went back from the PIN step: the sign-in that was never used is cancelled at the office.
+  async discardOfficeSignIn(office) {
+    try {
+      await this.officeLogout?.(office?.token);
+    } catch {
+      // offline: the token simply expires there
+    }
+  }
+
+  // After the sign-in: choose the PIN that locks this phone. The keys are made, the rep's name and code come from the OFFICE, and the
+  // office link is switched on with the token of the sign-in (it is kept inside the encrypted data).
+  async setUp({ name, employeeCode, pin, office = null }) {
+    const who = office ? { name: office.account.name, employeeCode: office.account.employee_code } : { name, employeeCode };
+    const error = rules.firstError(rules.pin(pin), rules.required(who.name, { min: 2, max: 100, label: 'Name' }), rules.employeeCode(who.employeeCode));
     if (error) throw new ValidationError(error);
 
     const key = await this.vault.setUp(pin);
     const store = await Store.open(this.persist, key);
-    await store.saveProfile({ name, employeeCode });
+    await store.saveProfile(who);
+    if (office) await store.saveSyncState({ linked: true, token: office.token, expires_at: office.expires_at, account: office.account, cursor: null, last_error: null });
 
     this.store = store;
     this.#startSync();
     this.#set('unlocked');
+    if (office) this.sync?.schedule(300); // bring this rep's data (and the shared client pool) down at once
   }
 
   // -> { ok: true } | { ok: false, attemptsLeft, lockedForMs? }

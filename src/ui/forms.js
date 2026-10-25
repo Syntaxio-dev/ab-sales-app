@@ -2,8 +2,11 @@ import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
 import { capitalize, dayString, formatDay, fromLocalInput, rupees, toLocalInput } from './format.js';
+import { businessInput, phoneField, placeInput } from './inputs.js';
 import { chipGroup, confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
 import { openContactForm } from './people.js';
+
+const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up further ahead than this
 
 const TOMORROW = () => new Date(Date.now() + 86_400_000);
 
@@ -68,7 +71,7 @@ export function openExpenseForm(app, existing = null) {
 
   const category = chipGroup(rules.CATEGORIES.map((c) => ({ value: c, label: capitalize(c) })), existing?.category ?? 'travel');
 
-  const amountInput = h('input', { class: 'input', type: 'text', inputMode: 'decimal', autocomplete: 'off', placeholder: '0', 'aria-label': 'Amount in rupees', value: existing ? plainAmount(existing.amount_paise) : '' });
+  const amountInput = h('input', { class: 'input', type: 'text', inputMode: 'decimal', autocomplete: 'off', maxLength: 12, placeholder: '0', 'aria-label': 'Amount in rupees', value: existing ? plainAmount(existing.amount_paise) : '' });
   amountInput.addEventListener('input', () => {
     amountInput.value = amountInput.value.replace(/[^0-9.,]/g, '');
   });
@@ -170,21 +173,23 @@ export function openExpenseForm(app, existing = null) {
 export function openClientForm(app, existing = null) {
   const store = app.store;
 
-  const name = field('Client name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', placeholder: 'For example JK Cement', value: existing?.name ?? '' }), 'The company or customer. Add the people who work there on the next screen.');
+  const name = field('Client name', businessInput({ placeholder: 'For example JK Cement', value: existing?.name ?? '' }), 'The company or customer. Add the people who work there on the next screen.');
   // "company" is the old way of writing the same thing: only shown for a client that already has one
-  const company = field('Group / company (optional)', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: existing?.company ?? '' }));
-  const phone = field('Main number (optional)', h('input', { class: 'input', type: 'tel', maxLength: 20, autocomplete: 'off', placeholder: '98765 43210', value: existing?.phone ?? '' }), 'For example the office board number.');
-  const city = field('Place (optional)', h('input', { class: 'input', type: 'text', maxLength: 100, autocomplete: 'off', autocapitalize: 'words', placeholder: 'Town or city', value: existing?.city ?? '' }), 'The team can filter clients by place.');
+  const company = field('Group / company (optional)', businessInput({ value: existing?.company ?? '' }));
+  const phone = phoneField('Main number (optional)', { value: existing?.phone ?? '', landline: true, hint: 'For example the office board number.' });
+  const city = field('Place (optional)', placeInput({ placeholder: 'Town or city', value: existing?.city ?? '' }), 'The team can filter clients by place.');
   company.el.hidden = !existing?.company;
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 4, value: existing?.notes ?? '' }));
 
   const save = saveButton('Save client');
   save.addEventListener('click', async () => {
+    const taken = phone.value ? store.numberOwner(phone.value, { exceptClient: existing?.id }) : null;
+
     const ok = validate([
-      [name, rules.required(name.input.value, { min: 2, max: 150, label: 'Name' })],
-      [company, rules.optional(company.input.value, { max: 150, label: 'Company' })],
-      [phone, rules.phone(phone.input.value)],
-      [city, rules.optional(city.input.value, { max: 100, label: 'City' })],
+      [name, rules.businessName(name.input.value, { label: 'Name' })],
+      [company, rules.businessName(company.input.value, { label: 'Company', requiredField: false })],
+      [phone, phone.problem() ?? (taken ? `This number is already saved under ${taken}.` : null)],
+      [city, rules.place(city.input.value, { label: 'Place' })],
       [notes, rules.optional(notes.input.value, { max: rules.MAX_NOTE, label: 'Notes' })],
     ]);
     if (!ok) return;
@@ -195,7 +200,7 @@ export function openClientForm(app, existing = null) {
         id: existing?.id,
         name: name.input.value,
         company: company.input.value,
-        phone: phone.input.value,
+        phone: phone.value,
         city: city.input.value,
         notes: notes.input.value,
       });
@@ -236,12 +241,12 @@ export function openMeetingForm(app, existing = null, preset = {}) {
     clients.length && !known && !existing ? h('option', { value: '', selected: startOn === '' }, 'Choose a client') : null,
     clients.map((c) => h('option', { value: c.id, selected: known && c.id === wanted }, c.city ? `${c.name} (${c.city})` : c.name)),
     h('option', { value: OTHER, selected: startOn === OTHER }, 'Someone else (type the name)')));
-  const typed = field('Client name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: known ? '' : existing?.client_name ?? '' }));
+  const typed = field('Client name', businessInput({ value: known ? '' : existing?.client_name ?? '' }));
   const when = field('When', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(TOMORROW()), value: toLocalInput(existing ? new Date(existing.meeting_at) : new Date()) }), null, 'row');
   const purpose = field('Purpose (optional)', h('input', { class: 'input', type: 'text', maxLength: rules.MAX_TEXT, autocomplete: 'off', value: existing?.purpose ?? '' }));
   const discussion = field('What was discussed (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_LONG_TEXT, rows: 5, value: existing?.discussion ?? '' }));
   const outcome = field('Outcome (optional)', h('input', { class: 'input', type: 'text', maxLength: rules.MAX_TEXT, autocomplete: 'off', value: existing?.outcome ?? '' }));
-  const followup = field('Follow-up (optional)', h('input', { class: 'input', type: 'datetime-local', value: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '' }), null, 'row');
+  const followup = field('Follow-up (optional)', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + TWO_YEARS - 86_400_000)), value: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '' }), null, 'row');
   const clearFollowup = h('button', { class: 'link', onclick: () => { followup.input.value = ''; } }, 'Remove follow-up');
 
   // the people met: chips of the people saved at the chosen client, plus a way to add one on the spot
@@ -301,12 +306,12 @@ export function openMeetingForm(app, existing = null, preset = {}) {
 
     const ok = validate([
       [client, client.input.value === '' ? 'Choose a client, or pick "Someone else" and type the name.' : null],
-      [typed, client.input.value === '' || chosen ? null : rules.required(typed.input.value, { max: 150, label: 'Client name' })],
+      [typed, client.input.value === '' || chosen ? null : rules.businessName(typed.input.value, { label: 'Client name' })],
       [when, meetingAt ? null : 'Pick the date and time.'],
       [purpose, rules.optional(purpose.input.value, { max: rules.MAX_TEXT, label: 'Purpose' })],
       [discussion, rules.optional(discussion.input.value, { max: rules.MAX_LONG_TEXT, label: 'Discussion' })],
       [outcome, rules.optional(outcome.input.value, { max: rules.MAX_TEXT, label: 'Outcome' })],
-      [followup, followupAt && meetingAt && followupAt < meetingAt ? 'Follow-up must be after the meeting.' : null],
+      [followup, followup.input.value && !followupAt ? 'Pick a valid date and time.' : followupAt && meetingAt && followupAt < meetingAt ? 'Follow-up must be after the meeting.' : followupAt && followupAt.getTime() > Date.now() + TWO_YEARS ? 'A follow-up can be at most 2 years ahead.' : null],
     ]);
     if (!ok) return;
 

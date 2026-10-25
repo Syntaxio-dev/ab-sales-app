@@ -3,6 +3,7 @@ import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
 import { formatDay, formatDayTime, formatTime, fromLocalInput, initials, rupees, toLocalInput } from './format.js';
+import { businessInput, numberInput, moneyInput, personInput } from './inputs.js';
 import { confirmDialog, field, openPage, toast, validate } from './kit.js';
 import { empty, fill, head } from './parts.js';
 import { callButton, openContactForm } from './people.js';
@@ -142,8 +143,8 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
     clients.length && !known && !existing ? h('option', { value: '' }, 'Choose a client') : null,
     ...clients.map((c) => h('option', { value: c.id, selected: known && c.id === wanted }, c.city ? `${c.name} (${c.city})` : c.name)),
     h('option', { value: OTHER, selected: startOn === OTHER }, 'Someone else (type the name)')));
-  const typedClient = field('Client name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: known ? '' : existing?.client_name ?? '' }));
-  const typedPerson = field('Person who asked (optional)', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: known ? '' : existing?.contact_name ?? '' }));
+  const typedClient = field('Client name', businessInput({ value: known ? '' : existing?.client_name ?? '' }));
+  const typedPerson = field('Person who asked (optional)', personInput({ value: known ? '' : existing?.contact_name ?? '' }));
 
   // who asked: chips of the people saved at the client (tap again to unselect)
   let person = existing?.contact_id && store.contactById(existing.contact_id) ? existing.contact_id : null;
@@ -191,10 +192,10 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
   const paiseToText = (paise) => (paise === null || paise === undefined ? '' : paise % 100 === 0 ? String(paise / 100) : (paise / 100).toFixed(2));
 
   const addBlock = (item = {}) => {
-    const product = field('Product', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', list: 'asked-products', placeholder: 'For example Muffle Furnace', value: item.product ?? '' }));
-    const brands = field('Preferred brands (optional)', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', placeholder: 'For example Remi, Labtech', value: item.brands ?? '' }));
-    const quantity = field('Quantity', h('input', { class: 'input', type: 'text', inputMode: 'numeric', maxLength: 6, autocomplete: 'off', value: String(item.quantity ?? 1) }));
-    const budget = field('Budget in rupees (optional)', h('input', { class: 'input', type: 'text', inputMode: 'decimal', autocomplete: 'off', placeholder: 'Total for this product', value: paiseToText(item.budget_paise) }));
+    const product = field('Product', businessInput({ list: 'asked-products', placeholder: 'For example Muffle Furnace', value: item.product ?? '' }));
+    const brands = field('Preferred brands (optional)', businessInput({ placeholder: 'For example Remi, Labtech', value: item.brands ?? '' }));
+    const quantity = field('Quantity', numberInput({ value: String(item.quantity ?? 1) }));
+    const budget = field('Budget in rupees (optional)', moneyInput({ placeholder: 'Total for this product', value: paiseToText(item.budget_paise) }));
     const remove = h('button', { type: 'button', class: 'link', onclick() { blocks.splice(blocks.indexOf(block), 1); drawItems(); } }, 'Remove this product');
     const block = { product, brands, quantity, budget, remove, el: h('div', { class: 'card pad stack' }) };
     blocks.push(block);
@@ -211,7 +212,7 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
   drawItems();
 
   const status = field('Status', h('select', { class: 'input' }, STATUSES.map((s) => h('option', { value: s.value, selected: s.value === (existing?.status ?? 'new') }, s.label))));
-  const followup = field('Follow-up (the app reminds you)', h('input', { class: 'input', type: 'datetime-local', value: existing ? (existing.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '') : toLocalInput(tomorrowAt10()) }), null, 'row');
+  const followup = field('Follow-up (the app reminds you)', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + 2 * 365 * 86_400_000 - 86_400_000)), value: existing ? (existing.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '') : toLocalInput(tomorrowAt10()) }), null, 'row');
   const clearFollowup = h('button', { type: 'button', class: 'link', onclick: () => { followup.input.value = ''; } }, 'No follow-up date');
   const note = field(existing ? 'Add a note (optional)' : 'First note (optional)', h('textarea', { class: 'input', maxLength: 500, rows: 3, placeholder: 'For example: wants the price by Friday, will buy before Diwali', value: '' }));
 
@@ -225,20 +226,21 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
     const items = [];
     const checks = [
       [client, client.input.value === '' ? 'Choose a client, or pick "Someone else" and type the name.' : null],
-      [typedClient, other ? rules.required(typedClient.input.value, { min: 2, max: 150, label: 'Client name' }) : null],
-      [typedPerson, other ? rules.optional(typedPerson.input.value, { max: 150, label: 'Person' }) : null],
+      [typedClient, other ? rules.businessName(typedClient.input.value, { label: 'Client name' }) : null],
+      [typedPerson, other ? rules.personName(typedPerson.input.value, { label: 'Person', requiredField: false }) : null],
     ];
 
     for (const b of blocks) {
-      const qty = b.quantity.input.value.trim() === '' ? 1 : Number(b.quantity.input.value);
+      const qtyText = b.quantity.input.value.trim();
+      const qty = qtyText === '' ? 1 : Number(qtyText);
       const budgetText = b.budget.input.value.trim();
       const paise = budgetText === '' ? null : rules.parsePaise(budgetText);
 
       checks.push(
-        [b.product, rules.required(b.product.input.value, { min: 2, max: 150, label: 'Product' })],
-        [b.brands, rules.optional(b.brands.input.value, { max: 150, label: 'Brands' })],
-        [b.quantity, Number.isInteger(qty) && qty >= 1 && qty <= 100_000 ? null : 'Quantity must be a whole number from 1 to 100000.'],
-        [b.budget, budgetText !== '' && paise === null ? 'Write the budget as a number, for example 150000.' : null],
+        [b.product, rules.businessName(b.product.input.value, { label: 'Product' })],
+        [b.brands, rules.businessName(b.brands.input.value, { label: 'Brands', requiredField: false })],
+        [b.quantity, qtyText === '' ? null : rules.wholeNumber(qtyText)],
+        [b.budget, budgetText !== '' && (paise === null || paise > 100_000_000_00) ? 'Write the budget as a number, for example 150000.' : null],
       );
       items.push({ product: b.product.input.value, brands: b.brands.input.value, quantity: qty, budget_paise: paise });
     }
@@ -309,7 +311,7 @@ export function openEnquiryPage(app, id) {
   };
 
   const noteBox = h('textarea', { class: 'input', rows: 3, maxLength: 500, placeholder: 'What happened, what was said ...', 'aria-label': 'Note' });
-  const followBox = h('input', { class: 'input', type: 'datetime-local', 'aria-label': 'Follow-up time' });
+  const followBox = h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + 2 * 365 * 86_400_000 - 86_400_000)), 'aria-label': 'Follow-up time' });
 
   const draw = () => {
     const e = store.enquiryById(id);

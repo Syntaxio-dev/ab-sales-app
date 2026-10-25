@@ -1,11 +1,11 @@
 import { h, icon } from './dom.js';
 import { callLabel, openClientPage } from './clients.js';
 import { dayLabel, formatDayTime, formatTime, initials, sameDay } from './format.js';
-import { confirmDialog, toast } from './kit.js';
+import { confirmDialog, openPage, toast } from './kit.js';
 import { openAddNumber } from './people.js';
-import { empty, fill, head } from './parts.js';
+import { empty, fill } from './parts.js';
 
-// The Calls tab: calls with numbers saved in the client pool (their name comes from the pool), and the numbers that are not saved yet.
+// The Calls page (opened from the calls card on Home): calls with numbers saved in the client pool (their name comes from the pool), and the numbers that are not saved yet.
 // It reads the phone's call history only after the rep turned it on (and Android allowed it). Calls with numbers that are not in the
 // pool are never saved or sent: they are only shown here, from memory, so a new client can be saved.
 
@@ -44,7 +44,49 @@ export async function askTurnOff(app) {
   return lastState;
 }
 
-export function renderCalls(container, app, ctx) {
+// ---- the calls card on Home: today's number, the week as bars, missed calls. Tap = the Calls page. ----
+
+// calls per day for the last 7 days, today last
+function lastSevenDays(calls, now) {
+  return Array.from({ length: 7 }, (_, i) => {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (6 - i));
+    return calls.filter((c) => sameDay(new Date(c.started_at), day)).length;
+  });
+}
+
+export function callsCard(app) {
+  const store = app.store;
+  const on = store.prefs.call_matching === true;
+  const now = new Date();
+  const calls = store.calls;
+  const today = calls.filter((c) => sameDay(new Date(c.started_at), now));
+  const missed = today.filter((c) => c.direction === 'missed').length;
+  const week = lastSevenDays(calls, now);
+  const weekTotal = week.reduce((a, b) => a + b, 0);
+  const top = Math.max(1, ...week);
+
+  const bars = h('div', { class: 'bars soft', role: 'img', 'aria-label': 'Calls over the last 7 days' },
+    week.map((n, i) => {
+      const bar = h('i', { class: i === 6 ? 'on' : null });
+      bar.style.height = `${Math.max(4, Math.round((34 * n) / top))}px`;
+      return bar;
+    }));
+
+  return h('button', { class: 'card pad calls-card', type: 'button', onclick: () => openCallsPage(app) },
+    h('div', { class: 'grow' },
+      h('p', { class: 'eyebrow' }, 'Calls with clients'),
+      on || calls.length
+        ? h('div', { class: 'row', style: { alignItems: 'baseline', gap: '10px' } },
+          h('span', { class: 'num', style: { fontSize: '30px', fontWeight: '600' } }, String(today.length)),
+          h('span', { class: 'muted' }, 'today'),
+          missed ? h('span', { class: 'chip missed' }, `${missed} missed`) : null)
+        : h('p', { style: { fontWeight: '700' } }, 'Call matching is off'),
+      h('p', { class: 'muted small', style: { marginTop: '4px' } },
+        on || calls.length ? `${weekTotal} in the last 7 days` : 'Tap to see which clients called you')),
+    on || calls.length ? bars : icon('chevron', 18));
+}
+
+export function openCallsPage(app) {
   const store = app.store;
   const body = h('div', { class: 'stack' });
   let state = lastState ?? (store.prefs.call_matching === true ? 'on' : 'off');
@@ -97,6 +139,9 @@ export function renderCalls(container, app, ctx) {
     h('button', { class: 'btn small-btn', onclick: () => openAddNumber(app, u.number) }, icon('userplus', 18), 'Save'));
 
   function draw() {
+    status.textContent = state === 'on' ? 'Matched with your clients' : 'Call matching is off';
+    refreshButton.hidden = state !== 'on';
+
     if (state !== 'on') {
       fill(body, consent(state === 'denied'), empty('phone', 'No calls to show', 'Turn on call matching to see your client calls here.'));
       return;
@@ -138,11 +183,11 @@ export function renderCalls(container, app, ctx) {
   }
 
   const refreshButton = h('button', { class: 'icon-btn', 'aria-label': 'Check for new calls', onclick: (e) => refresh(e.currentTarget) }, icon('refresh', 20));
+  const status = h('p', { class: 'eyebrow', style: { margin: '0' } });
+  const bar = h('div', { class: 'section-head' }, status, refreshButton);
 
-  fill(container,
-    head({ eyebrow: state === 'on' ? 'Matched with your clients' : 'Call matching is off', title: 'Calls', right: state === 'on' ? refreshButton : null }),
-    body);
-  ctx.fab(null);
+  const stop = store.subscribe(() => draw());
+  openPage({ title: 'Calls', body: h('div', { class: 'stack' }, bar, body), onClose: stop });
   draw();
 
   // find out the real state (Android may have taken the permission back), and read the history when it is a while since the last time

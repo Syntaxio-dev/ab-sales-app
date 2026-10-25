@@ -68,6 +68,8 @@ const ICONS = {
   refresh: 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7',
   swap: 'M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7',
   edit: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
+  book: 'M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5M8 7h8M8 11h6',
+  chevron: 'M9 5l7 7-7 7',
 };
 
 export function icon(name, size = 22) {

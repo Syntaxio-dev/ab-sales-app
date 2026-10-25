@@ -1,6 +1,7 @@
 import { ValidationError } from '../data/store.js';
 import { SyncError } from '../sync/http.js';
 import { h, icon } from './dom.js';
+import { loginInput } from './inputs.js';
 import { alertDialog, closeAll, confirmDialog, field, openPage, toast, validate } from './kit.js';
 
 // Everything about the link to the office: the card on Home, the sign-in page and the Settings group.
@@ -78,7 +79,7 @@ export function officeCard(app, ctx) {
 export function openConnect(app) {
   if (!app.sync) return;
 
-  const login = field('Employee code or phone', h('input', { class: 'input', type: 'text', maxLength: 100, autocomplete: 'off', autocapitalize: 'characters' }));
+  const login = field('Employee code or phone', loginInput());
   const password = field('Password', h('input', { class: 'input', type: 'password', maxLength: 200, autocomplete: 'off', autocapitalize: 'off', spellcheck: false }));
   const message = h('p', { class: 'err', role: 'alert' });
   const connect = h('button', { class: 'btn primary block' }, 'Connect');

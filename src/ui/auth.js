@@ -1,7 +1,9 @@
 import logoUrl from '../../assets/ab-logo.png';
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
+import { SyncError } from '../sync/http.js';
 import { h, icon } from './dom.js';
+import { loginInput } from './inputs.js';
 import { confirmDialog, field, validate } from './kit.js';
 
 // A 6 digit PIN box (setup and "change PIN"): digits only, hidden, no suggestions (the keyboard must not remember a PIN).
@@ -27,56 +29,110 @@ export function pinInput(placeholder = '••••••') {
 // The company logo sits on white: the stylesheet blends it into the background in both themes.
 const logo = () => h('img', { class: 'logo-img', src: logoUrl, alt: 'Agarwal Brothers' });
 
-// ---- first start: name, employee code and a PIN ----------------------------------
+// ---- first start: sign in to the office, then choose a PIN ---------------------------------
 
-export function renderSetup(container, app) {
-  const name = field('Your name', h('input', { class: 'input', type: 'text', maxLength: 100, autocomplete: 'off', autocapitalize: 'words' }));
-  const code = field('Employee code', h('input', { class: 'input', type: 'text', maxLength: 30, autocomplete: 'off', autocapitalize: 'characters', placeholder: 'For example REP001' }));
-  const pin = field('Choose a 6 digit PIN', pinInput());
-  const again = field('Type the PIN again', pinInput());
-  const message = h('p', { class: 'err', role: 'alert' });
-  const start = h('button', { class: 'btn primary block' }, 'Start');
+// A new phone has no account of its own. The manager makes the account on the website and gives the rep an employee code and a
+// password; only that opens the app (company data stays with people the company knows). The PIN is then only the lock of THIS phone.
+export function renderSignIn(container, app) {
+  let office = null; // the sign-in that is waiting for a PIN (kept in memory only)
 
-  code.input.addEventListener('input', () => {
-    code.input.value = code.input.value.replace(/[^A-Za-z0-9-]/g, '').toUpperCase();
-  });
+  const head = (title, ...rest) => h('div', { style: { display: 'grid', justifyItems: 'center', gap: '10px' } },
+    logo(),
+    h('p', { class: 'eyebrow', style: { margin: '6px 0 0' } }, 'Field sales'),
+    h('h1', { class: 'title-xl' }, title),
+    ...rest);
 
-  start.addEventListener('click', async () => {
-    message.textContent = '';
-    const ok = validate([
-      [name, rules.required(name.input.value, { min: 2, max: 100, label: 'Name' })],
-      [code, rules.employeeCode(code.input.value)],
-      [pin, rules.pin(pin.input.value)],
-      [again, again.input.value === pin.input.value ? null : 'The two PINs are not the same.'],
-    ]);
-    if (!ok) return;
+  // ---- step 1: the code and password from the manager ----
+  function stepSignIn() {
+    const login = field('Employee code or phone', loginInput({ placeholder: 'For example REP001' }));
+    const password = field('Password', h('input', { class: 'input', type: 'password', maxLength: 200, autocomplete: 'off', autocapitalize: 'off', spellcheck: false }));
+    const message = h('p', { class: 'err', role: 'alert' });
+    const go = h('button', { class: 'btn primary block' }, 'Sign in');
 
-    start.disabled = true;
-    start.replaceChildren(h('span', { class: 'spinner' }));
-    try {
-      await app.setUp({ name: name.input.value, employeeCode: code.input.value, pin: pin.input.value });
-    } catch (error) {
-      message.textContent = error instanceof ValidationError ? error.message : 'Could not set up the app. Please try again.';
-      start.disabled = false;
-      start.replaceChildren('Start');
-    }
-  });
+    go.addEventListener('click', async () => {
+      message.textContent = '';
+      const ok = validate([
+        [login, login.input.value.trim() ? null : 'Type the employee code (or phone number) your manager gave you.'],
+        [password, password.input.value ? null : 'Type your password.'],
+      ]);
+      if (!ok) return;
 
-  container.replaceChildren(
-    h('div', { class: 'center' },
-      h('div', { class: 'col left stack reveal' },
-        h('div', { style: { display: 'grid', justifyItems: 'center', gap: '10px' } },
-          logo(),
-          h('p', { class: 'eyebrow', style: { margin: '6px 0 0' } }, 'Field sales'),
-          h('h1', { class: 'title-xl' }, 'Welcome')),
-        name.el, code.el, pin.el, again.el,
-        h('p', { class: 'muted small' }, 'You need this PIN every time the app opens. If you forget it, the only way out is to erase the app data.'),
-        message,
-        start,
-        h('p', { class: 'muted small' },
-          'Your expenses, clients and meetings are saved on this phone only, locked with your PIN. ',
-          'Nothing is sent anywhere. The app does not read your calls, messages, contacts or location.'))),
-  );
+      go.disabled = true;
+      go.replaceChildren(h('span', { class: 'spinner' }));
+      try {
+        office = await app.signInToOffice(login.input.value, password.input.value);
+        password.input.value = '';
+        stepPin();
+      } catch (error) {
+        password.input.value = '';
+        message.textContent = error instanceof SyncError || error instanceof ValidationError ? error.message : 'Could not sign in. Please try again.';
+        go.disabled = false;
+        go.replaceChildren('Sign in');
+      }
+    });
+
+    container.replaceChildren(
+      h('div', { class: 'center' },
+        h('div', { class: 'col left stack reveal' },
+          head('Welcome'),
+          app.officeLogin
+            ? h('p', { class: 'muted' }, 'Sign in with the employee code and password your manager gave you. Without them the app cannot be used.')
+            : h('p', { class: 'err' }, 'This copy of the app is not linked to the office, so it cannot be set up. Ask your manager for the latest version.'),
+          h('div', { class: 'panel' }, login.el, password.el, message, go),
+          h('p', { class: 'muted small' }, 'Your expenses, clients, enquiries and meetings are saved on this phone, locked with a PIN you choose next, and sent to the office over a secure connection. The app does not read your messages, contacts or location.'))),
+    );
+    go.disabled = !app.officeLogin;
+  }
+
+  // ---- step 2: a PIN for this phone ----
+  function stepPin() {
+    const pin = field('Choose a 6 digit PIN', pinInput());
+    const again = field('Type the PIN again', pinInput());
+    const message = h('p', { class: 'err', role: 'alert' });
+    const start = h('button', { class: 'btn primary block' }, 'Start');
+    const back = h('button', { class: 'link', style: { justifySelf: 'center' } }, 'Not you? Use another account');
+
+    back.addEventListener('click', async () => {
+      const cancelled = office;
+      office = null;
+      stepSignIn();
+      await app.discardOfficeSignIn(cancelled);
+    });
+
+    start.addEventListener('click', async () => {
+      message.textContent = '';
+      const ok = validate([
+        [pin, rules.pin(pin.input.value)],
+        [again, again.input.value === pin.input.value ? null : 'The two PINs are not the same.'],
+      ]);
+      if (!ok) return;
+
+      start.disabled = true;
+      start.replaceChildren(h('span', { class: 'spinner' }));
+      try {
+        await app.setUp({ pin: pin.input.value, office });
+        office = null;
+      } catch (error) {
+        message.textContent = error instanceof ValidationError ? error.message : 'Could not set up the app. Please try again.';
+        start.disabled = false;
+        start.replaceChildren('Start');
+      }
+    });
+
+    container.replaceChildren(
+      h('div', { class: 'center' },
+        h('div', { class: 'col left stack reveal' },
+          head(`Hello, ${office.account.name.split(' ')[0]}`, h('p', { class: 'muted small' }, office.account.employee_code)),
+          h('div', { class: 'panel' },
+            pin.el, again.el,
+            h('p', { class: 'muted small' }, 'This PIN locks this phone. You need it every time the app opens, and after a minute away. If you forget it, erase the app data and sign in again: everything the office already has comes back.'),
+            message,
+            start),
+          back)),
+    );
+  }
+
+  stepSignIn();
 }
 
 // ---- every start, and after a minute away ------------------------------------------

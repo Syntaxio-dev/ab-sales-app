@@ -20,11 +20,12 @@ import { ALLOW_LOCAL_HTTP, API_BASE, SERVER_URL } from './config.js';
 import { Vault } from './security/vault.js';
 import { SyncEngine } from './sync/engine.js';
 import { createHttp } from './sync/http.js';
-import { renderLock, renderSetup } from './ui/auth.js';
+import { renderLock, renderSignIn } from './ui/auth.js';
 import { h, icon } from './ui/dom.js';
 import { closeAll, closeTop, hasOpen } from './ui/kit.js';
 import { applyTheme, watchSystemTheme } from './ui/theme.js';
-import { renderCalls, resetCallsView } from './ui/calls.js';
+import { resetCallsView } from './ui/calls.js';
+import { renderGuide, resetGuideView } from './ui/guide.js';
 import { renderEnquiries, resetEnquiryView } from './ui/enquiries.js';
 import { renderClients, renderExpenses, renderHome, renderMeetings, resetTabViews } from './ui/tabs.js';
 
@@ -37,7 +38,7 @@ const TABS = [
   { id: 'home', label: 'Home', icon: 'home', render: renderHome },
   { id: 'enquiries', label: 'Enquiries', icon: 'clipboard', render: renderEnquiries },
   { id: 'clients', label: 'Clients', icon: 'users', render: renderClients },
-  { id: 'calls', label: 'Calls', icon: 'phone', render: renderCalls },
+  { id: 'guide', label: 'Guide', icon: 'book', render: renderGuide },
   { id: 'meetings', label: 'Meetings', icon: 'calendar', render: renderMeetings },
   { id: 'expenses', label: 'Expenses', icon: 'receipt', render: renderExpenses },
 ];
@@ -50,13 +51,18 @@ function deviceModel() {
   return (match?.[1] ?? 'Unknown').replace(/\sBuild\/.*/, '').trim().slice(0, 100);
 }
 
-// No office address in this build (or an unsafe one) = no office link at all; the app still works on its own.
-function makeSyncFactory() {
+// The one link to the office: the first sign-in on a new phone, and the sync after it. No office address in this build (or an unsafe
+// one) = no link: the app then cannot be set up at all, because only an account the manager made may use it.
+function makeOfficeLink() {
   if (!SERVER_URL) return null;
 
   try {
     const http = createHttp({ base: API_BASE, allowLocalHttp: ALLOW_LOCAL_HTTP, appVersion: APP_VERSION });
-    return (store) => new SyncEngine({ store, http, appVersion: APP_VERSION, deviceModel: deviceModel() });
+    return {
+      syncFactory: (store) => new SyncEngine({ store, http, appVersion: APP_VERSION, deviceModel: deviceModel() }),
+      login: (login, password) => http.post('/auth/login', { login, password, app_version: APP_VERSION, device_model: deviceModel() }),
+      logout: (token) => http.post('/auth/logout', {}, { token }),
+    };
   } catch (error) {
     console.error('Office link disabled:', error?.name ?? 'Error');
     return null;
@@ -70,7 +76,8 @@ async function boot() {
     ? await (await import('./platform/native.js')).createNativePlatform()
     : await (await import('./platform/web.js')).createWebPlatform();
 
-  const app = new App({ vault: new Vault(platform.secrets), persist: platform.persist, platform, syncFactory: makeSyncFactory() });
+  const link = makeOfficeLink();
+  const app = new App({ vault: new Vault(platform.secrets), persist: platform.persist, platform, syncFactory: link?.syncFactory ?? null, officeLogin: link?.login ?? null, officeLogout: link?.logout ?? null });
 
   let tab = 'home';
   let leaveScreen = () => {};
@@ -94,6 +101,7 @@ async function boot() {
     resetTabViews();
     resetEnquiryView();
     resetCallsView();
+    resetGuideView();
     closeAll(); // no form or dialog may stay on screen while locked
 
     // the page container is (re)built each time, below the optional preview banner
@@ -101,7 +109,7 @@ async function boot() {
     const screen = h('div', { style: { flex: '1', display: 'flex', flexDirection: 'column', minHeight: '0' } });
     root.append(screen);
 
-    if (phase === 'setup') renderSetup(screen, app);
+    if (phase === 'setup') renderSignIn(screen, app);
     else if (phase === 'locked') leaveScreen = renderLock(screen, app) ?? (() => {});
     else if (phase === 'unlocked') {
       tab = 'home';

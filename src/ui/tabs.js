@@ -3,6 +3,7 @@ import { needsActionCard } from './enquiries.js';
 import { reportCard } from './report.js';
 import { h, icon, svg } from './dom.js';
 import { openClientForm, openExpenseForm, openMeetingForm } from './forms.js';
+import { callsCard } from './calls.js';
 import { capitalize, dayLabel, dayString, formatDay, formatDayTime, formatHeadDay, formatTime, initials, parseDay, rupees, sameDay, splitRupees } from './format.js';
 import { officeCard } from './office.js';
 import { empty, fill, head } from './parts.js';
@@ -99,6 +100,8 @@ export function renderHome(container, app, ctx) {
         h('p', { class: 'eyebrow' }, 'Not synced'),
         h('div', { class: 'num' }, String(store.unsyncedCount)),
         h('div', { class: 'hint' }, app.sync?.status.connected ? 'Waiting for the office' : 'Saved on this phone'))),
+
+    callsCard(app),
 
     needsActionCard(app, ctx),
 

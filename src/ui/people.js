@@ -3,6 +3,7 @@ import { positionKey } from '../core/positions.js';
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
+import { businessInput, emailInput, personInput, phoneField, placeInput, positionInput } from './inputs.js';
 import { confirmDialog, dialog, field, openPage, toast, validate } from './kit.js';
 
 // The people at a client: the form, the position dropdown (with "add a new position") and the call button.
@@ -55,7 +56,7 @@ export function positionField(app, initial = '', label = 'Position (optional)') 
 }
 
 async function askNewPosition(app) {
-  const input = h('input', { class: 'input', type: 'text', maxLength: 60, autocomplete: 'off', autocapitalize: 'words', placeholder: 'For example Plant Chemist', 'aria-label': 'New position' });
+  const input = positionInput({ placeholder: 'For example Plant Chemist', 'aria-label': 'New position' });
   const error = h('p', { class: 'err', role: 'alert' });
 
   return dialog({
@@ -97,21 +98,23 @@ const submitting = async (button, work) => {
 export function openContactForm(app, { client, existing = null, number = '', onSaved = null }) {
   const store = app.store;
 
-  const name = field('Name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words', value: existing?.name ?? '' }));
+  const startNumber = existing?.phone ?? number;
+  const name = field('Name', personInput({ value: existing?.name ?? '' }));
   const position = positionField(app, existing?.position ?? '');
-  const phone = field('Phone number', h('input', { class: 'input', type: 'tel', maxLength: 20, autocomplete: 'off', placeholder: '98765 43210', value: existing?.phone ?? number }), 'Calls with this number are matched to this person.');
-  const email = field('E-mail (optional)', h('input', { class: 'input', type: 'email', maxLength: 150, autocomplete: 'off', value: existing?.email ?? '' }));
+  // a mobile number, unless the number that is already there is a landline (an old record, or one picked from the call history)
+  const phone = phoneField('Phone number (optional)', { value: startNumber, landline: Boolean(startNumber) && !/^\+91[6-9]/.test(startNumber), hint: 'Calls with this number are matched to this person.' });
+  const email = field('E-mail (optional)', emailInput({ value: existing?.email ?? '' }));
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 3, value: existing?.notes ?? '' }));
 
   const save = h('button', { class: 'btn primary block' }, 'Save person');
   save.addEventListener('click', async () => {
-    const normal = rulesNumber(phone.input.value);
+    const normal = rulesNumber(phone.value);
     const taken = normal ? store.numberOwner(normal, { exceptContact: existing?.id }) : null;
 
     const ok = validate([
-      [name, rules.required(name.input.value, { min: 2, max: 150, label: 'Name' })],
-      [phone, rules.phone(phone.input.value) ?? (taken ? `This number is already saved under ${taken}.` : null)],
-      [email, rules.optional(email.input.value, { max: 150, label: 'E-mail' })],
+      [name, rules.personName(name.input.value, { max: 150 })],
+      [phone, phone.problem() ?? (taken ? `This number is already saved under ${taken}.` : null)],
+      [email, rules.email(email.input.value)],
       [notes, rules.optional(notes.input.value, { max: rules.MAX_NOTE, label: 'Notes' })],
     ]);
     if (!ok) return;
@@ -123,7 +126,7 @@ export function openContactForm(app, { client, existing = null, number = '', onS
         client_id: client.id,
         name: name.input.value,
         position: position.value,
-        phone: phone.input.value,
+        phone: phone.value,
         email: email.input.value,
         notes: notes.input.value,
       });
@@ -167,9 +170,9 @@ export function openAddNumber(app, number) {
     h('option', { value: NEW }, '+ A new client')));
   which.input.value = clients.length ? '' : NEW;
 
-  const clientName = field('New client name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words' }));
-  const place = field('Place (optional)', h('input', { class: 'input', type: 'text', maxLength: 100, autocomplete: 'off', autocapitalize: 'words' }));
-  const person = field('Person\'s name', h('input', { class: 'input', type: 'text', maxLength: 150, autocomplete: 'off', autocapitalize: 'words' }));
+  const clientName = field('New client name', businessInput());
+  const place = field('Place (optional)', placeInput());
+  const person = field('Person\'s name', personInput({ maxLength: 100 }));
   const position = positionField(app, '');
 
   const showNew = () => {
@@ -187,9 +190,9 @@ export function openAddNumber(app, number) {
 
     const ok = validate([
       [which, which.input.value === '' ? 'Choose a client, or add a new one.' : null],
-      [clientName, isNew ? rules.required(clientName.input.value, { min: 2, max: 150, label: 'Client name' }) : null],
-      [place, isNew ? rules.optional(place.input.value, { max: 100, label: 'Place' }) : null],
-      [person, taken ? `This number is already saved under ${taken}.` : rules.required(person.input.value, { min: 2, max: 150, label: 'Name' })],
+      [clientName, isNew ? rules.businessName(clientName.input.value, { label: 'Client name' }) : null],
+      [place, isNew ? rules.place(place.input.value) : null],
+      [person, taken ? `This number is already saved under ${taken}.` : rules.personName(person.input.value)],
     ]);
     if (!ok) return;
 

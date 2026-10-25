@@ -14,13 +14,15 @@ import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/cr
 
 export class ValidationError extends Error {}
 
-const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', enquiry: 'q:', call: 'l:', report: 'r:', bill: 'b:', tomb: 't:' };
+const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', bill: 'b:', tomb: 't:' };
 const PROFILE_KEY = 'profile';
 const SYNC_KEY = 'sync';
 const PREFS_KEY = 'prefs';
 const POSITIONS_KEY = 'positions';
+const GUIDE_KEY = 'guide'; // the product guide (written by the manager; this phone only reads it)
 // the order the records are sent in: a client before the people at it
-const KINDS = ['expense', 'client', 'contact', 'meeting', 'enquiry', 'call', 'report'];
+const KINDS = ['expense', 'client', 'contact', 'meeting', 'enquiry', 'call', 'report', 'note'];
+const MAX_NOTES_KEPT = 60; // requests for a guide note that were sent are kept as a short history
 
 // UPDATES KEEP THE DATA. Phones that already hold records get a newer app over the old one, so a newer version must be able
 // to read every record an older version wrote. The rules (the same idea as Prysm's normalize()):
@@ -36,6 +38,8 @@ const DEFAULTS = {
   call: { direction: 'outgoing', number: '', client_id: null, contact_id: null, client_name: '', contact_name: '', duration_seconds: 0, synced: false, sync_error: null },
   enquiry: { client_id: null, client_name: '', contact_id: null, contact_name: '', status: 'new', items: [], next_followup_at: null, closed_at: null, timeline: [], synced: false, sync_error: null },
   report: { notes: '', tomorrow_plan: '', issues: '', figures: {}, submitted_at: null, synced: false, sync_error: null },
+  // a rep's request to the manager: "please add / correct this in the product guide"
+  note: { product_id: null, product_name: '', body: '', synced: false, sync_error: null },
 };
 
 const MAX_PEOPLE_PER_MEETING = 20;
@@ -46,6 +50,7 @@ const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up furthe
 const MUTATORS = [
   'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveContact', 'deleteContact', 'saveMeeting', 'deleteMeeting',
   'saveEnquiry', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
+  'saveNote', 'setGuideFromServer',
   'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced',
   'putFromServer', 'removeFromServer', 'saveBillFromServer', 'wipeEverything',
 ];
@@ -71,6 +76,8 @@ export class Store {
   #enquiries = new Map();
   #reports = new Map();
   #calls = new Map();
+  #notes = new Map();
+  #guide = { version: null, products: [] };
   #profile = null;
   #prefs = {};
   #positions = { names: [], pending: [] };
@@ -108,6 +115,9 @@ export class Store {
     store.#sync = await store.#read(SYNC_KEY);
     store.#prefs = (await store.#read(PREFS_KEY)) ?? {};
 
+    const guide = await store.#read(GUIDE_KEY);
+    if (guide && Array.isArray(guide.products)) store.#guide = { version: typeof guide.version === 'string' ? guide.version : null, products: guide.products.filter((p) => p?.id) };
+
     const positions = await store.#read(POSITIONS_KEY);
     if (positions && Array.isArray(positions.names)) store.#positions = { names: positions.names.filter((n) => typeof n === 'string'), pending: (positions.pending ?? []).filter((n) => typeof n === 'string') };
 
@@ -129,6 +139,8 @@ export class Store {
     this.#enquiries.clear();
     this.#reports.clear();
     this.#calls.clear();
+    this.#notes.clear();
+    this.#guide = { version: null, products: [] };
     this.#profile = null;
     this.#prefs = {};
     this.#positions = { names: [], pending: [] };
@@ -254,10 +266,10 @@ export class Store {
   // input: { id?, name, company, phone, city, notes }
   async saveClient(input) {
     check(
-      rules.required(input.name, { min: 2, max: 150, label: 'Name' }),
-      rules.optional(input.company, { max: 150, label: 'Company' }),
+      rules.businessName(input.name, { label: 'Name' }),
+      rules.businessName(input.company, { label: 'Company', requiredField: false }),
       rules.phone(input.phone),
-      rules.optional(input.city, { max: 100, label: 'City' }),
+      rules.place(input.city, { label: 'Place' }),
       rules.optional(input.notes, { max: rules.MAX_NOTE, label: 'Notes' }),
     );
 
@@ -330,11 +342,10 @@ export class Store {
   async saveContact(input) {
     check(
       this.#clients.has(input.client_id) ? null : 'Pick the client this person works at.',
-      rules.required(input.name, { min: 2, max: 150, label: 'Name' }),
+      rules.personName(input.name, { max: 150 }),
       String(input.position ?? '').trim() ? rules.position(input.position) : null,
       rules.phone(input.phone),
-      rules.optional(input.email, { max: 150, label: 'E-mail' }),
-      String(input.email ?? '').trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(input.email).trim()) ? 'Enter a valid e-mail address.' : null,
+      rules.email(input.email),
       rules.optional(input.notes, { max: rules.MAX_NOTE, label: 'Notes' }),
     );
 
@@ -673,8 +684,9 @@ export class Store {
     for (const prefix of Object.values(PREFIX)) {
       for (const slot of await this.#persist.keys(prefix)) await this.#persist.del(slot);
     }
-    for (const slot of [PROFILE_KEY, SYNC_KEY, PREFS_KEY, POSITIONS_KEY]) await this.#persist.del(slot);
+    for (const slot of [PROFILE_KEY, SYNC_KEY, PREFS_KEY, POSITIONS_KEY, GUIDE_KEY]) await this.#persist.del(slot);
 
+    this.#guide = { version: null, products: [] };
     for (const kind of KINDS) this.#map(kind).clear();
     this.#tombs.clear();
     this.#profile = null;
@@ -683,6 +695,61 @@ export class Store {
     this.#positions = { names: [], pending: [] };
     this.#phoneIndex = null;
     this.#changed(false);
+  }
+
+  // ---- product guide: the manager writes it, every rep reads it (offline) ---------------------------------
+
+  get guideProducts() {
+    return this.#guide.products;
+  }
+
+  get guideVersion() {
+    return this.#guide.version;
+  }
+
+  productById(id) {
+    return (id && this.#guide.products.find((p) => p.id === id)) || null;
+  }
+
+  // The list the office sent (already cleaned by src/sync/merge.js). It replaces the old one as a whole: a product the manager removed is gone.
+  async setGuideFromServer({ version, products }) {
+    this.#guide = { version: typeof version === 'string' ? version : null, products: Array.isArray(products) ? products : [] };
+    await this.#write(GUIDE_KEY, this.#guide);
+    this.#changed(false);
+  }
+
+  // A rep asks the manager to add or correct something in the guide. Newest first.
+  get notes() {
+    return [...this.#notes.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  // input: { product_id (a product of the guide, or null), product_name, body }
+  async saveNote(input) {
+    const product = input.product_id ? this.productById(input.product_id) : null;
+    const name = product ? product.name : String(input.product_name ?? '').trim();
+
+    check(
+      input.product_id && !product ? 'This product is not in the guide any more.' : null,
+      product ? null : rules.businessName(name, { label: 'Product' }),
+      rules.required(input.body, { min: 3, max: 500, label: 'Your request' }),
+    );
+
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    const record = { id, product_id: product?.id ?? null, product_name: name.slice(0, 200), body: String(input.body).trim(), synced: false, sync_error: null, created_at: now, updated_at: now };
+
+    await this.#write(PREFIX.note + id, record);
+    this.#notes.set(id, record);
+
+    // a short history: the oldest requests that were already sent are forgotten
+    const sent = this.notes.filter((n) => n.synced);
+    for (const old of sent.slice(MAX_NOTES_KEPT)) {
+      await this.#persist.del(PREFIX.note + old.id);
+      this.#notes.delete(old.id);
+    }
+
+    this.#changed();
+    return record;
   }
 
   // ---- meetings --------------------------------------------------------------
@@ -752,7 +819,7 @@ export class Store {
   }
 
   #map(kind) {
-    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, enquiry: this.#enquiries, call: this.#calls, report: this.#reports }[kind];
+    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, enquiry: this.#enquiries, call: this.#calls, report: this.#reports, note: this.#notes }[kind];
   }
 
   getRecord(kind, id) {
@@ -846,6 +913,7 @@ export class Store {
       enquiries: this.enquiries.map(strip),
       calls: this.calls.map(strip),
       reports: this.reports.map(strip),
+      product_requests: this.notes.map(strip),
     };
   }
 

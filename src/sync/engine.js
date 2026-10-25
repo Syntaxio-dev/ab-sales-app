@@ -1,5 +1,5 @@
 import { fromBase64, toBase64 } from '../security/crypto.js';
-import { CLEANERS, decide, keepPendingBill } from './merge.js';
+import { CLEANERS, cleanGuide, decide, keepPendingBill } from './merge.js';
 import { SyncError } from './http.js';
 
 // Keeps the phone and the office in step. The rules that make it safe to run again and again, at any time, on any network:
@@ -25,6 +25,7 @@ export const KINDS = [
   { kind: 'enquiry', wire: 'enquiries' },
   { kind: 'call', wire: 'calls', log: true },
   { kind: 'report', wire: 'reports', log: true },
+  { kind: 'note', wire: 'product_requests', log: true }, // a rep asks for a note in the product guide: only ever sent
 ];
 
 const wireOf = {
@@ -43,6 +44,7 @@ const wireOf = {
     uuid: r.id, report_date: r.report_date, notes: r.notes, tomorrow_plan: r.tomorrow_plan, issues: r.issues, figures: r.figures,
     submitted_at: r.submitted_at, updated_at: r.updated_at,
   }),
+  note: (r) => ({ uuid: r.id, product_uuid: r.product_id, product_name: r.product_name, body: r.body, updated_at: r.updated_at }),
   call: (r) => ({
     uuid: r.id, direction: r.direction, number: r.number, client_uuid: r.client_id, contact_uuid: r.contact_id, client_name: r.client_name,
     contact_name: r.contact_name, started_at: r.started_at, duration_seconds: r.duration_seconds, updated_at: r.updated_at,
@@ -196,6 +198,7 @@ export class SyncEngine {
       await this.#push(summary);
       await this.#uploadBills(summary);
       await this.#pull(summary);
+      await this.#pullGuide();
       await this.#downloadBills(summary);
 
       await this.#store.saveSyncState({ last_sync_at: this.clock().toISOString(), last_error: null });
@@ -380,6 +383,21 @@ export class SyncEngine {
         if (!this.#store.syncState?.pool_v2) await this.#store.saveSyncState({ pool_v2: true });
         return;
       }
+    }
+  }
+
+  // The product guide: the phone says which version it holds, the office answers "unchanged" or sends the whole list.
+  async #pullGuide() {
+    try {
+      const known = this.#store.guideVersion;
+      const answer = await this.#http.get('/products', { token: this.#token(), query: known ? { version: known } : {} });
+      if (this.#stopped || answer?.unchanged === true) return;
+
+      const guide = cleanGuide(answer);
+      if (guide) await this.#store.setGuideFromServer(guide);
+    } catch (error) {
+      // an office that has no guide yet must not make every sync look broken
+      if (!(error instanceof SyncError && error.code === 'NOT_FOUND')) throw error;
     }
   }
 

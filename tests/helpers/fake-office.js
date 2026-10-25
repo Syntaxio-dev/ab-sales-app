@@ -5,7 +5,8 @@
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const error = (status, code, message, errors = {}) => json(status, { code, message, errors });
 
-const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries', 'calls', 'reports'];
+const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries', 'calls', 'reports', 'product_requests'];
+const NOT_PULLED = new Set(['product_requests']); // a rep's request for a guide note only goes to the office
 const STATUSES = ['new', 'price_to_send', 'price_sent', 'callback', 'meeting_planned', 'negotiation', 'won', 'lost'];
 const SHARED = new Set(['clients', 'contacts']);
 const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries'];
@@ -17,6 +18,8 @@ export class FakeOffice {
     this.tokens = new Map();     // token -> userId
     this.rows = Object.fromEntries(KINDS.map((k) => [k, new Map()]));   // uuid -> { owner, data, rev, deleted, assignedTo? }
     this.positions = [...PRESETS];
+    this.products = [];          // the product guide the manager wrote (raw, as the API sends it)
+    this.productsVersion = 'v0000000000000001';
     this.bills = new Map();      // expense uuid -> base64
     this.rev = 0;
     this.offline = false;
@@ -41,6 +44,12 @@ export class FakeOffice {
     const row = this.rows.expenses.get(uuid);
     row.data = { ...row.data, status, reject_reason: reason, reviewed_at: new Date().toISOString() };
     row.rev = ++this.rev;
+  }
+
+  // the manager edits the product guide in the admin: any change is a new version stamp
+  setProducts(products) {
+    this.products = products;
+    this.productsVersion = `v${String(++this.rev).padStart(15, '0')}`;
   }
 
   // the manager gives a client to a rep (an admin edit is a newer version for the phones)
@@ -81,6 +90,11 @@ export class FakeOffice {
     if (path === '/sync/push' && method === 'POST') return this.push(userId, body);
     if (path === '/sync/pull') return this.pull(userId, u.searchParams.get('since'));
     if (path === '/uploads/bill' && method === 'POST') return this.upload(userId, body);
+    if (path === '/products' && method === 'GET') {
+      return u.searchParams.get('version') === this.productsVersion
+        ? json(200, { version: this.productsVersion, unchanged: true })
+        : json(200, { version: this.productsVersion, unchanged: false, products: this.products });
+    }
 
     const bill = /^\/expenses\/([^/]+)\/bill$/.exec(path);
     if (bill) {
@@ -177,7 +191,11 @@ export class FakeOffice {
         const shared = SHARED.has(kind);
         if (row && !shared && row.owner !== userId) { results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'UUID_TAKEN', message: 'This id cannot be used.' }); continue; }
         if (row?.deleted) { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
-        if (row && kind === 'calls') { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
+        if (row && (kind === 'calls' || kind === 'product_requests')) { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
+        if (kind === 'product_requests' && !(String(r.body ?? '').trim().length >= 3 && String(r.product_name ?? '').trim().length >= 2)) {
+          results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'INVALID', message: 'The request is too short.' });
+          continue;
+        }
         if (!row && kind === 'reports' && [...this.rows.reports.values()].some((x) => x.owner === userId && x.data.report_date === r.report_date)) {
           results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'INVALID', message: 'A report for this day was already sent.' });
           continue;
@@ -234,7 +252,7 @@ export class FakeOffice {
     const from = since ? Number(since) : 0;
     let capped = null;
 
-    for (const kind of KINDS) {
+    for (const kind of KINDS.filter((k) => !NOT_PULLED.has(k))) {
       const rows = [...this.rows[kind].values()].filter((r) => (SHARED.has(kind) || r.owner === userId) && r.rev >= from).sort((a, b) => a.rev - b.rev);
       const page = rows.slice(0, this.limit);
       if (rows.length > this.limit) { capped = Math.min(capped ?? Infinity, page.at(-1).rev); out.has_more = true; }

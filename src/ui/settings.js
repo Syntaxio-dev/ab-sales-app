@@ -123,7 +123,7 @@ export function openSettings(app) {
 
     const draw = async () => {
       const state = await app.callMatchingState();
-      card.replaceChildren(row('phone', 'Call matching', state === 'on' ? 'On: client calls show in the Calls tab.' : state === 'denied' ? 'Android did not allow it. Tap to try again.' : 'Off: your call history is not read.', async () => {
+      card.replaceChildren(row('phone', 'Call matching', state === 'on' ? 'On: client calls show on the Calls card on Home.' : state === 'denied' ? 'Android did not allow it. Tap to try again.' : 'Off: your call history is not read.', async () => {
         if (state === 'on') await askTurnOff(app);
         else await askTurnOn(app);
         draw();

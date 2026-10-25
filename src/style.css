@@ -34,6 +34,17 @@
   --scrim: rgba(11, 37, 69, 0.45);
   --dot-glow: none;
 
+  /* glass: frosted panels over a soft ambient light. Translucent fill, a light edge, a hairline highlight on top. */
+  --glass: rgba(255, 255, 255, 0.64);
+  --glass-strong: rgba(255, 255, 255, 0.8);
+  --glass-edge: rgba(11, 37, 69, 0.09);
+  --glass-shine: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 10px 28px -14px rgba(11, 37, 69, 0.28);
+  --blob-a: rgba(0, 180, 216, 0.2);
+  --blob-b: rgba(0, 119, 182, 0.13);
+  --sheen: linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 45%);
+  --blur: 18px;
+
   --font-ui: 'Manrope', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-head: 'Sora', 'Manrope', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
@@ -76,6 +87,16 @@
   --success: #4fe0cc;
   --scrim: rgba(0, 0, 0, 0.55);
   --dot-glow: 0 0 5px rgba(34, 211, 245, 0.22);
+
+  /* dark glass stays quiet: a barely visible light in the corners, no neon */
+  --glass: rgba(14, 20, 26, 0.6);
+  --glass-strong: rgba(10, 15, 20, 0.82);
+  --glass-edge: rgba(255, 255, 255, 0.09);
+  --glass-shine: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --glass-shadow: 0 12px 30px -16px rgba(0, 0, 0, 0.95);
+  --blob-a: rgba(34, 211, 245, 0.09);
+  --blob-b: rgba(0, 119, 182, 0.12);
+  --sheen: linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 45%);
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -331,3 +352,82 @@ a.call-btn { text-decoration: none; }
 html, body { overscroll-behavior-x: none; }
 .view { touch-action: pan-y pinch-zoom; }
 .filters, .people, .chips, .view textarea, .view input { touch-action: pan-x pan-y; }
+
+/* ---------- glass (v1.5): frosted panels over a soft light ----------
+   Cheap panels (cards, rows, fields) are only translucent; the real blur is kept for the few things that float over other content
+   (dock, dialogs, page bars), so long lists stay smooth on older phones. All colours are the tokens above. */
+:root {
+  --ambient:
+    radial-gradient(70% 38% at 12% -4%, var(--blob-a), transparent 72%),
+    radial-gradient(60% 34% at 104% 22%, var(--blob-b), transparent 72%),
+    radial-gradient(70% 36% at -6% 104%, var(--blob-b), transparent 72%);
+}
+#app { isolation: isolate; }
+#app::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: var(--ambient); }
+.page { background: var(--ambient), var(--bg); }
+
+.card, .tile, .amount-card, .seg {
+  background-color: var(--glass); border-color: var(--glass-edge); box-shadow: var(--glass-shine), var(--glass-shadow);
+}
+.item, .icon-btn, .btn:not(.primary), .input, select.input, textarea.input, .srow-box, .filter:not([aria-pressed='true']):not([aria-checked='true']), .dialog .input {
+  background-color: var(--glass); border-color: var(--glass-edge); box-shadow: var(--glass-shine);
+}
+.btn.danger { background-color: transparent; box-shadow: none; }
+.srow-box .input, .amount-line .input { box-shadow: none; background-color: transparent; }
+.group .card > .item { box-shadow: none; }
+.input:focus { border-color: var(--link); box-shadow: none; }
+.item:active, button.tile:active, .icon-btn:active { background-color: var(--tint); }
+
+.dock {
+  background-color: var(--glass-strong); border-color: var(--glass-edge); box-shadow: var(--glass-shine), var(--dock-shadow);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(170%); backdrop-filter: blur(var(--blur)) saturate(170%);
+}
+.dialog {
+  background-color: var(--glass-strong); border-color: var(--glass-edge); box-shadow: var(--glass-shine), var(--glass-shadow);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(170%); backdrop-filter: blur(var(--blur)) saturate(170%);
+}
+.scrim { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.page-head { background-color: var(--glass); border-bottom: 1px solid var(--glass-edge); -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur)); }
+.page-foot { background: var(--glass-strong); border-top: 1px solid var(--glass-edge); -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur)); }
+.hero::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--sheen); pointer-events: none; }
+
+/* a sign-in / setup panel */
+.panel { background-color: var(--glass-strong); border: 1px solid var(--glass-edge); border-radius: 24px; padding: 18px; box-shadow: var(--glass-shine), var(--glass-shadow); -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur)); }
+.panel > * + * { margin-top: 14px; }
+
+/* the calls card on Home: a number and the week as bars (like the spending card) */
+.calls-card { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; text-align: left; }
+.calls-card:active { background-color: var(--tint); }
+.bars.soft i { background: var(--line-strong); }
+.bars.soft i.on { background: var(--accent); }
+
+/* product guide */
+.guide-entry { width: 100%; background: none; border: 0; padding: 0; text-align: left; }
+.guide-entry .title { display: block; font-weight: 700; }
+.guide-entry .sub { display: block; color: var(--mute); font-size: 13px; line-height: 1.35; }
+.chip.premium { background: var(--tint); color: var(--link); }
+.chip.economy { background: var(--ok-bg); color: var(--ok-ink); }
+.chip.lite { background: var(--mu-bg); color: var(--mute); }
+.tier { display: grid; gap: 8px; }
+.tier + .tier { padding-top: 12px; border-top: 1px solid var(--glass-edge); }
+.tier-head { display: flex; align-items: center; gap: 10px; }
+.fold { background-color: var(--glass); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shine); }
+.fold > summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; min-height: 52px; font-weight: 700; cursor: pointer; }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary svg { color: var(--mute); transition: transform 0.2s var(--ease); }
+.fold[open] > summary svg { transform: rotate(90deg); }
+.fold-body { padding: 0 16px 16px; line-height: 1.5; }
+.fold-body > * + * { margin-top: 10px; }
+.bullets { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+
+/* the phone box: country code + number */
+.phone-row { display: grid; grid-template-columns: 124px 1fr; gap: 8px; }
+.phone-row select.input { padding-left: 12px; font-weight: 700; }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dock, .dialog, .page-head, .page-foot, .panel { background-color: var(--surface); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .card, .tile, .amount-card, .seg, .item, .icon-btn, .btn:not(.primary), .input, select.input, textarea.input, .srow-box, .dock, .dialog, .page-head, .page-foot, .panel { background-color: var(--surface); }
+  * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+}
