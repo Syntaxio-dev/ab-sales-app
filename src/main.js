@@ -26,12 +26,14 @@ import { closeAll, closeTop, hasOpen } from './ui/kit.js';
 import { applyTheme, watchSystemTheme } from './ui/theme.js';
 import { resetCallsView } from './ui/calls.js';
 import { renderGuide, resetGuideView } from './ui/guide.js';
+import { installSelectSheets } from './ui/sheets.js';
 import { renderEnquiries, resetEnquiryView } from './ui/enquiries.js';
 import { renderClients, renderExpenses, renderHome, renderMeetings, resetTabViews } from './ui/tabs.js';
 
 // Before anything is drawn: the saved light / dark choice (public/theme-init.js already did it before the first paint).
 applyTheme();
 watchSystemTheme();
+installSelectSheets();
 
 // The order of the dock, and of the swipe: swipe left = the next tab, swipe right = the previous one.
 const TABS = [
@@ -128,7 +130,11 @@ async function boot() {
         tab = id;
         draw(true, direction);
       },
-      fab: (label, onclick) => fabSlot.replaceChildren(...(label ? [h('button', { class: 'btn primary fab-pill', onclick }, icon('plus', 18), label)] : [])),
+      // a big main button, and optionally a smaller second one right under it: fab(label, onclick, { label, onclick })
+      fab: (label, onclick, second = null) => fabSlot.replaceChildren(...(label ? [
+        h('button', { class: 'btn primary fab-pill', onclick }, icon('plus', 18), label),
+        second ? h('button', { class: 'btn fab-mini', onclick: second.onclick }, icon('users', 16), second.label) : null,
+      ].filter(Boolean) : [])),
       onCleanup: (fn) => cleanups.push(fn),
     };
 
@@ -137,6 +143,7 @@ async function boot() {
       const current = TABS.find((t) => t.id === tab);
       const keepScroll = animate ? 0 : view.scrollTop;
 
+      view.dataset.tab = tab; // a screen can be styled on its own (see style.css)
       view.classList.remove('reveal', 'from-next', 'from-prev');
       runCleanups();
       current.render(view, app, ctx);

@@ -204,12 +204,12 @@ test('the figures of a day are counted from what is on the phone', async () => {
   const { store } = await phone();
   const client = await store.saveClient({ name: 'JK Cement', phone: '98765 43210' });
   await store.saveCalls([
-    { id: crypto.randomUUID(), direction: 'outgoing', number: '+919876543210', client_id: client.id, client_name: 'JK Cement', started_at: iso(-3_600_000), duration_seconds: 120 },
-    { id: crypto.randomUUID(), direction: 'missed', number: '+919876543210', client_id: client.id, client_name: 'JK Cement', started_at: iso(-1_800_000), duration_seconds: 0 },
+    { id: crypto.randomUUID(), direction: 'outgoing', number: '+919876543210', client_id: client.id, client_name: 'JK Cement', started_at: iso(-120_000), duration_seconds: 120 },
+    { id: crypto.randomUUID(), direction: 'missed', number: '+919876543210', client_id: client.id, client_name: 'JK Cement', started_at: iso(-60_000), duration_seconds: 0 },
     { id: crypto.randomUUID(), direction: 'outgoing', number: '+919876543210', client_id: client.id, client_name: 'JK Cement', started_at: iso(-3 * 86_400_000), duration_seconds: 500 },
   ]);
   await store.saveMeeting({ client_id: client.id, client_name: 'JK Cement', meeting_at: new Date().toISOString() });
-  await store.saveExpense({ category: 'fuel', amount_paise: 45000, expense_date: day(), note: '' });
+  await store.saveExpense({ category: 'fuel', bill_type: 'with_bill', work_area: 'local', amount_paise: 45000, expense_date: day(), note: '' });
   const e = await store.saveEnquiry(input());
   await store.saveEnquiry(input({ client_name: 'Old Co', id: undefined }));
 

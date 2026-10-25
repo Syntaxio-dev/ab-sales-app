@@ -9,6 +9,69 @@ export const TIERS = [
 
 export const tierOf = (value) => TIERS.find((t) => t.value === value) ?? null;
 
+// A guide kept on a phone before the "before the meeting" fields existed has none of them: they get empty defaults when it is read.
+const PRODUCT_DEFAULTS = { client_types: [], pitch: '', key_notes: [], formula: '', do: [], avoid: [], match_rules: [] };
+export const withGuideDefaults = (product) => ({ ...PRODUCT_DEFAULTS, ...product });
+
+// Who the rep may be meeting today. The ids are the ones the office uses (a product is marked "usually bought by" these).
+export const CLIENT_TYPES = [
+  { id: 'pharma_qc', label: 'Pharma QC', icon: 'flask' },
+  { id: 'hospital', label: 'Hospital & pathology', icon: 'pulse' },
+  { id: 'university', label: 'University & research', icon: 'cap' },
+  { id: 'food_dairy', label: 'Food & dairy', icon: 'utensils' },
+  { id: 'industrial_qc', label: 'Industrial QC', icon: 'settings' },
+  { id: 'water_environment', label: 'Water & environment', icon: 'drop' },
+];
+export const CLIENT_TYPE_IDS = CLIENT_TYPES.map((t) => t.id);
+export const clientTypeOf = (id) => CLIENT_TYPES.find((t) => t.id === id) ?? null;
+
+/** The products marked as usually bought by this kind of client, in the order of the sheet. */
+export const productsForClientType = (products, id) => products.filter((p) => p.client_types.includes(id)).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
+
+/**
+ * The manager marks the words to highlight with two stars: "spins fast so the **heavy parts settle**".
+ * -> ['spins fast so the ', { hl: 'heavy parts settle' }]. Text only: the screen builds a span from it, never HTML.
+ */
+export function highlight(text) {
+  const parts = [];
+  String(text ?? '').split('**').forEach((piece, i) => {
+    if (piece) parts.push(i % 2 === 1 ? { hl: piece } : piece);
+  });
+  return parts;
+}
+
+/** The first sentence of a text (at most "max" letters), for the one-liner under a product's name. */
+export function firstSentence(text, max = 150) {
+  const clean = String(text ?? '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+  const end = clean.search(/[.!?](\s|$)/);
+  const one = end > 0 ? clean.slice(0, end + 1) : clean;
+  return one.length > max ? `${one.slice(0, max - 1).trimEnd()}…` : one;
+}
+
+/**
+ * The cheat sheet of a product: the manager's key notes when he wrote them; otherwise a short version of what is in the guide
+ * (the brands by budget, then the first questions to ask), so the sheet is never empty and never invented.
+ * -> [{ text, label? }] at most 5 rows.
+ */
+export function cheatNotes(p) {
+  if (p.key_notes.length) return p.key_notes.slice(0, 5).map((text) => ({ text }));
+
+  const rows = TIERS.filter((t) => p[t.key].length).map((t) => ({ label: t.label, text: p[t.key].join(', ') }));
+  for (const q of p.key_parameters.slice(0, Math.max(0, 5 - rows.length))) rows.push({ label: 'Ask', text: q });
+  return rows.slice(0, 5);
+}
+
+/** The rep's own scripts that match the words typed (title, product, text). Newest first. */
+export function searchScripts(scripts, query) {
+  const wanted = words(query);
+  if (!wanted.length) return scripts;
+
+  return scripts.filter((s) => {
+    const tokens = words(`${s.title} ${s.product_name} ${s.body}`);
+    return wanted.every((w) => tokens.some((t) => t === w || t.startsWith(w)));
+  });
+}
+
 // "Ika, Cole-Parmer" -> ["ika", "cole", "parmer"]: lower case, letters and digits only, so "Cole Parmer" finds "Cole-Parmer".
 const words = (text) => String(text ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 
@@ -22,6 +85,7 @@ const places = (p) => [
   { label: 'Top brand', weight: 6, text: p.top_brands.map((b) => `${b.name} ${b.note}`).join(' ') },
   { label: 'Type', weight: 5, text: p.variants.map((v) => `${v.name} ${v.text}`).join(' ') },
   { label: 'About', weight: 3, text: `${p.summary} ${p.industries}` },
+  { label: 'Pitch', weight: 3, text: `${p.pitch} ${p.key_notes.join(' ')}` },
   { label: 'Question to ask', weight: 2, text: p.key_parameters.join(' ') },
   { label: 'Problem in the first year', weight: 2, text: p.short_term_problems.join(' ') },
   { label: 'Problem after a year', weight: 2, text: p.long_term_problems.join(' ') },

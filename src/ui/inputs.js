@@ -39,6 +39,28 @@ export const businessInput = (props = {}) => restrict(h('input', { ...textProps,
 /** A town or city: letters, spaces and . , ' - */
 export const placeInput = (props = {}) => restrict(h('input', { ...textProps, maxLength: 100, autocapitalize: 'words', ...props }), PLACE_STRIP);
 
+// The towns the team visits most, one tap under the Place box. The box still takes any other place.
+export const RAJASTHAN_CITIES = ['Jaipur', 'Jodhpur', 'Udaipur', 'Kota', 'Ajmer', 'Bikaner', 'Bhilwara', 'Alwar', 'Sikar', 'Bhiwadi', 'Neemrana', 'Pali'];
+
+/** Quick-pick chips for a Place box: a tap fills the box, typing something else clears the highlight. */
+export function cityPicks(input) {
+  const el = h('div', { class: 'chips quick-picks', role: 'group', 'aria-label': 'Quick picks for the place' });
+  const same = (a, b) => a.trim().toLowerCase() === b.toLowerCase();
+
+  const draw = () => el.replaceChildren(...RAJASTHAN_CITIES.map((city) => h('button', {
+    class: 'filter', type: 'button', 'aria-pressed': String(same(input.value, city)),
+    onclick() {
+      input.value = city;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      draw();
+    },
+  }, city)));
+
+  input.addEventListener('input', draw);
+  draw();
+  return el;
+}
+
 /** A position (job title): the same characters the shared list allows. */
 export const positionInput = (props = {}) => restrict(h('input', { ...textProps, maxLength: 60, autocapitalize: 'words', ...props }), /[^\p{L}\p{N} &/().,'-]/gu);
 

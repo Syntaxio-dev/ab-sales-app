@@ -2,8 +2,9 @@ import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
 import { capitalize, dayString, formatDay, fromLocalInput, rupees, toLocalInput } from './format.js';
-import { businessInput, phoneField, placeInput } from './inputs.js';
+import { businessInput, cityPicks, phoneField, placeInput } from './inputs.js';
 import { chipGroup, confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
+import { dateInput, dateTimeInput } from './pickers.js';
 import { openContactForm } from './people.js';
 
 const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up further ahead than this
@@ -56,9 +57,11 @@ function openExpenseView(app, expense) {
         h('span', { class: `chip ${expense.status}` }, capitalize(expense.status)),
         h('p', { class: 'muted small' }, approved ? 'The office approved this expense. It cannot be changed any more.' : 'The office rejected this expense. It cannot be changed any more.'),
         !approved && expense.reject_reason ? h('p', { class: 'err' }, `Reason: ${expense.reject_reason}`) : null),
-      line('Category', capitalize(expense.category)),
+      line('Category', rules.categoryLabel(expense.category)),
       line('Amount', rupees(expense.amount_paise)),
       line('Date', formatDay(new Date(`${expense.expense_date}T00:00:00`))),
+      expense.work_area ? line('Work area', rules.WORK_AREA_LABELS[expense.work_area]) : null,
+      expense.bill_type ? line('Bill', rules.BILL_TYPE_LABELS[expense.bill_type]) : null,
       expense.note ? line('Note', expense.note) : null,
       expense.has_bill ? preview : null),
   });
@@ -69,7 +72,21 @@ export function openExpenseForm(app, existing = null) {
 
   const store = app.store;
 
-  const category = chipGroup(rules.CATEGORIES.map((c) => ({ value: c, label: capitalize(c) })), existing?.category ?? 'travel');
+  const category = chipGroup(rules.CATEGORIES.map((c) => ({ value: c, label: rules.categoryLabel(c) })), existing?.category ?? 'travel');
+
+  // Two answers the rep must give every time (no default, so a wrong one is never saved by not looking): where the work was, and a bill or not.
+  const choice = (label, group, hint = null) => {
+    const error = h('div', { class: 'err', role: 'alert' });
+    group.el.classList.add('chips-2');
+    return slot(h('div', { class: 'field' }, h('p', { class: 'eyebrow', style: { margin: '0 0 2px' } }, label), hint ? h('p', { class: 'muted small', style: { margin: '0 0 8px' } }, hint) : null, group.el, error), null, error);
+  };
+  const workGroup = chipGroup(rules.WORK_AREAS.map((w) => ({ value: w, label: { local: 'Local', outstation: 'Outstation' }[w] })), existing?.work_area ?? null, () => work.setError(null));
+  const work = choice('Work area', workGroup, 'Local is in Jaipur. Outstation is outside Jaipur.');
+  const billGroup = chipGroup(rules.BILL_TYPES.map((b) => ({ value: b, label: rules.BILL_TYPE_LABELS[b] })), existing?.bill_type ?? (existing?.has_bill ? 'with_bill' : null), () => {
+    billChoice.setError(null);
+    billZone.hidden = billGroup.value !== 'with_bill';
+  });
+  const billChoice = choice('Bill', billGroup);
 
   const amountInput = h('input', { class: 'input', type: 'text', inputMode: 'decimal', autocomplete: 'off', maxLength: 12, placeholder: '0', 'aria-label': 'Amount in rupees', value: existing ? plainAmount(existing.amount_paise) : '' });
   amountInput.addEventListener('input', () => {
@@ -79,7 +96,7 @@ export function openExpenseForm(app, existing = null) {
     h('p', { class: 'eyebrow' }, 'Amount'),
     h('div', { class: 'amount-line' }, h('span', { class: 'cur', 'aria-hidden': 'true' }, '₹'), amountInput)), amountInput);
 
-  const date = field('Date', h('input', { class: 'input', type: 'date', min: '2020-01-01', max: dayString(TOMORROW()), value: existing?.expense_date ?? dayString() }), null, 'row');
+  const date = field('Date', dateInput({ min: '2020-01-01', max: dayString(TOMORROW()), value: existing?.expense_date ?? dayString(), pickerTitle: 'Date of the expense' }), null, 'row');
   const note = field('Note (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 3, value: existing?.note ?? '' }), null, 'row');
 
   // bill photo
@@ -122,6 +139,16 @@ export function openExpenseForm(app, existing = null) {
     }
   }
 
+  // the photo box only shows when the rep says there is a bill
+  const billZone = h('div', { class: 'bill-drop' },
+    h('div', { class: 'bill-title' }, icon('camera', 20), 'Attach bill photo (optional)'),
+    preview,
+    h('div', { class: 'grid2' },
+      h('button', { class: 'btn small-btn', type: 'button', onclick: () => pick('camera') }, icon('camera', 18), 'Camera'),
+      h('button', { class: 'btn small-btn', type: 'button', onclick: () => pick('gallery') }, icon('image', 18), 'Gallery')),
+    removeBtn);
+  billZone.hidden = billGroup.value !== 'with_bill';
+
   showBill(null);
   if (existing?.has_bill) store.billFor(existing.id).then((bytes) => !newBill && !removeBill && showBill(bytes));
 
@@ -130,6 +157,8 @@ export function openExpenseForm(app, existing = null) {
     const ok = validate([
       [amount, rules.amount(amountInput.value)],
       [date, rules.expenseDate(date.input.value)],
+      [work, rules.workArea(workGroup.value)],
+      [billChoice, rules.billType(billGroup.value)],
       [note, rules.optional(note.input.value, { max: rules.MAX_NOTE, label: 'Note' })],
     ]);
     if (!ok) return;
@@ -139,6 +168,8 @@ export function openExpenseForm(app, existing = null) {
       category: category.value,
       amount_paise: rules.parsePaise(amountInput.value),
       expense_date: date.input.value,
+      work_area: workGroup.value,
+      bill_type: billGroup.value,
       note: note.input.value,
     }, { bill: newBill, removeBill }));
 
@@ -150,14 +181,9 @@ export function openExpenseForm(app, existing = null) {
     onClose: () => billUrl && URL.revokeObjectURL(billUrl),
     body: h('div', { class: 'stack' },
       h('div', null, h('p', { class: 'eyebrow' }, 'Category'), category.el),
-      amount.el, date.el, note.el,
-      h('div', { class: 'bill-drop' },
-        h('div', { class: 'bill-title' }, icon('camera', 20), 'Attach bill photo'),
-        preview,
-        h('div', { class: 'grid2' },
-          h('button', { class: 'btn small-btn', onclick: () => pick('camera') }, icon('camera', 18), 'Camera'),
-          h('button', { class: 'btn small-btn', onclick: () => pick('gallery') }, icon('image', 18), 'Gallery')),
-        removeBtn),
+      amount.el, date.el, work.el, billChoice.el,
+      billZone,
+      note.el,
       existing ? deleteButton('Delete expense', async () => {
         if (await confirmDialog({ title: 'Delete this expense?', text: 'The bill photo is deleted too. This cannot be undone.' })) {
           await store.deleteExpense(existing.id);
@@ -172,12 +198,17 @@ export function openExpenseForm(app, existing = null) {
 
 export function openClientForm(app, existing = null) {
   const store = app.store;
+  if (existing && !store.canEdit(existing)) { // somebody else's client: read only (the client page shows it)
+    toast(`Added by ${store.addedBy(existing)}. Only they, or your manager, can change it.`);
+    return;
+  }
 
   const name = field('Client name', businessInput({ placeholder: 'For example JK Cement', value: existing?.name ?? '' }), 'The company or customer. Add the people who work there on the next screen.');
   // "company" is the old way of writing the same thing: only shown for a client that already has one
   const company = field('Group / company (optional)', businessInput({ value: existing?.company ?? '' }));
   const phone = phoneField('Main number (optional)', { value: existing?.phone ?? '', landline: true, hint: 'For example the office board number.' });
   const city = field('Place (optional)', placeInput({ placeholder: 'Town or city', value: existing?.city ?? '' }), 'The team can filter clients by place.');
+  city.input.after(cityPicks(city.input));
   company.el.hidden = !existing?.company;
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 4, value: existing?.notes ?? '' }));
 
@@ -220,8 +251,7 @@ export function openClientForm(app, existing = null) {
           await store.deleteClient(existing.id);
           page.close();
         }
-      }) : null,
-      existing && !store.canDelete(existing) ? h('p', { class: 'muted small' }, `Added by ${existing.created_by_name ?? existing.created_by_code}. Only they, or your manager, can delete this client. You can still correct the details.`) : null),
+      }) : null),
     footer: save,
   });
 }
@@ -242,11 +272,11 @@ export function openMeetingForm(app, existing = null, preset = {}) {
     clients.map((c) => h('option', { value: c.id, selected: known && c.id === wanted }, c.city ? `${c.name} (${c.city})` : c.name)),
     h('option', { value: OTHER, selected: startOn === OTHER }, 'Someone else (type the name)')));
   const typed = field('Client name', businessInput({ value: known ? '' : existing?.client_name ?? '' }));
-  const when = field('When', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(TOMORROW()), value: toLocalInput(existing ? new Date(existing.meeting_at) : new Date()) }), null, 'row');
+  const when = field('When', dateTimeInput({ min: '2020-01-01T00:00', max: toLocalInput(TOMORROW()), value: toLocalInput(existing ? new Date(existing.meeting_at) : new Date()), pickerTitle: 'When was the meeting?' }), null, 'row');
   const purpose = field('Purpose (optional)', h('input', { class: 'input', type: 'text', maxLength: rules.MAX_TEXT, autocomplete: 'off', value: existing?.purpose ?? '' }));
   const discussion = field('What was discussed (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_LONG_TEXT, rows: 5, value: existing?.discussion ?? '' }));
   const outcome = field('Outcome (optional)', h('input', { class: 'input', type: 'text', maxLength: rules.MAX_TEXT, autocomplete: 'off', value: existing?.outcome ?? '' }));
-  const followup = field('Follow-up (optional)', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + TWO_YEARS - 86_400_000)), value: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '' }), null, 'row');
+  const followup = field('Follow-up (optional)', dateTimeInput({ min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + TWO_YEARS - 86_400_000)), value: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '', placeholder: 'No follow-up', pickerTitle: 'Follow-up' }), null, 'row');
   const clearFollowup = h('button', { class: 'link', onclick: () => { followup.input.value = ''; } }, 'Remove follow-up');
 
   // the people met: chips of the people saved at the chosen client, plus a way to add one on the spot

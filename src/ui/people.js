@@ -3,7 +3,8 @@ import { positionKey } from '../core/positions.js';
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
-import { businessInput, emailInput, personInput, phoneField, placeInput, positionInput } from './inputs.js';
+import { initials } from './format.js';
+import { businessInput, cityPicks, emailInput, personInput, phoneField, placeInput, positionInput } from './inputs.js';
 import { confirmDialog, dialog, field, openPage, toast, validate } from './kit.js';
 
 // The people at a client: the form, the position dropdown (with "add a new position") and the call button.
@@ -94,9 +95,36 @@ const submitting = async (button, work) => {
   }
 };
 
-// A person at a client. `number` pre-fills the phone box (a number picked from the call history).
-export function openContactForm(app, { client, existing = null, number = '', onSaved = null }) {
+const detail = (key, value) => (value ? h('div', { class: 'detail-line' }, h('span', { class: 'k' }, key), h('span', { class: 'v' }, value)) : null);
+
+// A person somebody else added: everybody reads it (and can call), only the one who added it changes it.
+function openPersonView(app, person) {
   const store = app.store;
+  const company = person.client_id ? store.clientById(person.client_id) : null;
+
+  openPage({
+    title: person.name,
+    body: h('div', { class: 'stack' },
+      h('div', { class: 'card pad' },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+          h('span', { class: 'avatar' }, initials(person.name)),
+          h('div', { class: 'grow', style: { minWidth: '0' } }, h('h2', { style: { fontSize: '19px' } }, person.name), person.position ? h('p', { class: 'muted' }, person.position) : null),
+          person.phone ? callButton(person.phone, `Call ${person.name}`) : null),
+        h('div', { style: { marginTop: '10px' } },
+          detail('Company', company?.name ?? 'No company'),
+          detail('Phone', person.phone),
+          detail('E-mail', person.email),
+          detail('Added by', store.addedBy(person)),
+          detail('Notes', person.notes))),
+      h('p', { class: 'muted small' }, 'Only the rep who added this person, or your manager, can change the details.')),
+  });
+}
+
+// A person at a client, or without one (client null: a customer who buys on their own; the company can be picked here).
+// `number` pre-fills the phone box (a number picked from the call history).
+export function openContactForm(app, { client = null, existing = null, number = '', onSaved = null }) {
+  const store = app.store;
+  if (existing && !store.canEdit(existing)) return openPersonView(app, existing);
 
   const startNumber = existing?.phone ?? number;
   const name = field('Name', personInput({ value: existing?.name ?? '' }));
@@ -105,6 +133,12 @@ export function openContactForm(app, { client, existing = null, number = '', onS
   const phone = phoneField('Phone number (optional)', { value: startNumber, landline: Boolean(startNumber) && !/^\+91[6-9]/.test(startNumber), hint: 'Calls with this number are matched to this person.' });
   const email = field('E-mail (optional)', emailInput({ value: existing?.email ?? '' }));
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 3, value: existing?.notes ?? '' }));
+
+  // opened from a client: the company is fixed. Opened on its own: the rep may pick one, or leave it empty.
+  const company = client ? null : field('Company (optional)', h('select', { class: 'input' },
+    h('option', { value: '' }, 'No company'),
+    ...store.clients.map((c) => h('option', { value: c.id }, c.city ? `${c.name} (${c.city})` : c.name))), 'Leave it empty for someone who buys on their own.');
+  if (company) company.input.value = existing?.client_id && store.clientById(existing.client_id) ? existing.client_id : '';
 
   const save = h('button', { class: 'btn primary block' }, 'Save person');
   save.addEventListener('click', async () => {
@@ -123,7 +157,7 @@ export function openContactForm(app, { client, existing = null, number = '', onS
     const done = await submitting(save, async () => {
       saved = await store.saveContact({
         id: existing?.id,
-        client_id: client.id,
+        client_id: client ? client.id : company.input.value || null,
         name: name.input.value,
         position: position.value,
         phone: phone.value,
@@ -142,8 +176,9 @@ export function openContactForm(app, { client, existing = null, number = '', onS
   const page = openPage({
     title: existing ? 'Edit person' : 'New person',
     body: h('div', { class: 'stack' },
-      h('p', { class: 'muted small' }, `At ${client.name}${client.city ? `, ${client.city}` : ''}`),
-      name.el, position.el, phone.el, email.el, notes.el,
+      client ? h('p', { class: 'muted small' }, `At ${client.name}${client.city ? `, ${client.city}` : ''}`) : null,
+      name.el, company?.el, position.el, phone.el, email.el, notes.el,
+      existing ? h('p', { class: 'muted small' }, `Added by ${store.addedBy(existing)}.`) : null,
       existing && store.canDelete(existing) ? h('button', {
         class: 'btn danger block',
         async onclick() {
@@ -152,8 +187,7 @@ export function openContactForm(app, { client, existing = null, number = '', onS
             page.close();
           }
         },
-      }, icon('trash', 18), 'Delete person') : null,
-      existing && !store.canDelete(existing) ? h('p', { class: 'muted small' }, `Added by ${existing.created_by_code || "the office"}. Only they, or your manager, can delete this person. You can still correct the details.`) : null),
+      }, icon('trash', 18), 'Delete person') : null),
     footer: save,
   });
 }
@@ -172,6 +206,7 @@ export function openAddNumber(app, number) {
 
   const clientName = field('New client name', businessInput());
   const place = field('Place (optional)', placeInput());
+  place.input.after(cityPicks(place.input));
   const person = field('Person\'s name', personInput({ maxLength: 100 }));
   const position = positionField(app, '');
 

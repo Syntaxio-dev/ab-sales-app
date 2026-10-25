@@ -16,7 +16,7 @@ const daysAgo = (n) => {
   const d = new Date(Date.now() - n * 86_400_000);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
-const expense = (extra = {}) => ({ category: 'fuel', amount_paise: 45000, expense_date: today(), note: '', ...extra });
+const expense = (extra = {}) => ({ category: 'fuel', bill_type: 'with_bill', work_area: 'local', amount_paise: 45000, expense_date: today(), note: '', ...extra });
 const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
 
 beforeEach(async () => {

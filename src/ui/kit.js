@@ -85,6 +85,81 @@ export function alertDialog(title, text) {
   return dialog({ title, content: h('p', { class: 'muted' }, text), buttons: [{ label: 'OK', value: true, primary: true }] });
 }
 
+// ---- bottom sheet -------------------------------------------------------------
+
+// A panel that slides up from the bottom over the page (the cheat sheet). It closes with the X, a tap on the dark area, a swipe down
+// and the phone's back button; while it is open the Tab key stays inside it, and the focus goes back where it was when it closes.
+// head: what sits next to the X. body: the scrolling content.
+export function openBottomSheet({ label, head, body, onClose }) {
+  const returnTo = document.activeElement;
+  let closed = false;
+  let startY = null;
+  let drag = 0;
+
+  const closeButton = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => entry.close() }, icon('close', 20));
+  const top = h('div', { class: 'bsheet-top' },
+    h('div', { class: 'bsheet-handle', 'aria-hidden': 'true' }),
+    h('div', { class: 'bsheet-head' }, h('div', { class: 'grow' }, head), closeButton));
+  const sheet = h('div', { class: 'bsheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': label }, top, h('div', { class: 'bsheet-body' }, body));
+  const scrim = h('div', { class: 'scrim bsheet-scrim', role: 'presentation', onclick: (event) => { if (event.target === scrim) entry.close(); } }, sheet);
+
+  const entry = {
+    el: scrim,
+    onClose,
+    closing: false,
+    close() {
+      if (closed) return;
+      closed = true;
+      entry.closing = true;
+      stack.splice(stack.indexOf(entry), 1);
+      scrim.classList.add('leaving');
+      setTimeout(() => scrim.remove(), 220);
+      onClose?.();
+      if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus();
+    },
+  };
+
+  // swipe down on the handle or the title row (only moves the sheet, nothing else)
+  top.addEventListener('touchstart', (event) => { startY = event.touches[0].clientY; drag = 0; }, { passive: true });
+  top.addEventListener('touchmove', (event) => {
+    if (startY === null) return;
+    drag = Math.max(0, event.touches[0].clientY - startY);
+    sheet.style.transform = `translateY(${drag}px)`;
+  }, { passive: true });
+  top.addEventListener('touchend', () => {
+    if (startY === null) return;
+    startY = null;
+    if (drag > 90) entry.close();
+    else sheet.style.transform = '';
+  });
+
+  scrim.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      entry.close();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+
+    const items = [...sheet.querySelectorAll('button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])')].filter((el) => !el.disabled && el.getClientRects().length > 0);
+    if (!items.length) return;
+
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
+  stack.push(entry);
+  root().append(scrim);
+  closeButton.focus();
+  return { close: entry.close };
+}
+
 // ---- toast ------------------------------------------------------------------
 
 let toastTimer = 0;

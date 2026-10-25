@@ -34,7 +34,7 @@ async function phone({ persist = new MemoryPersist(), connect = true, code = 'RE
   return { store, engine, persist };
 }
 
-const expense = (extra = {}) => ({ category: 'fuel', amount_paise: 45000, expense_date: today(), note: 'Taxi', ...extra });
+const expense = (extra = {}) => ({ category: 'fuel', bill_type: 'with_bill', work_area: 'local', amount_paise: 45000, expense_date: today(), note: 'Taxi', ...extra });
 
 beforeEach(async () => {
   office = new FakeOffice();
@@ -106,7 +106,7 @@ test('the office never gets a status, a token or anything the phone does not own
   await engine.syncNow();
 
   const sent = office.calls.find((c) => c.path === '/sync/push').body.expenses[0];
-  assert.deepEqual(Object.keys(sent).sort(), ['amount_paise', 'category', 'expense_date', 'has_bill', 'note', 'updated_at', 'uuid']);
+  assert.deepEqual(Object.keys(sent).sort(), ['amount_paise', 'bill_type', 'category', 'expense_date', 'has_bill', 'note', 'updated_at', 'uuid', 'work_area']);
 });
 
 test('an edit made while the push is on its way is not lost, and is sent in the next round', async () => {

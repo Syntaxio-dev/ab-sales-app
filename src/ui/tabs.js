@@ -1,3 +1,4 @@
+import { BILL_TYPE_LABELS, categoryLabel } from '../core/rules.js';
 import { openClientPage } from './clients.js';
 import { needsActionCard } from './enquiries.js';
 import { reportCard } from './report.js';
@@ -7,11 +8,13 @@ import { callsCard } from './calls.js';
 import { capitalize, dayLabel, dayString, formatDay, formatDayTime, formatHeadDay, formatTime, initials, parseDay, rupees, sameDay, splitRupees } from './format.js';
 import { officeCard } from './office.js';
 import { empty, fill, head } from './parts.js';
+import { openContactForm } from './people.js';
 import { openSettings } from './settings.js';
 
 // The four main screens. Each one fills the scrolling view; `ctx` gives them goTab(id) and fab(label, onclick).
 
-const CATEGORY_ICON = { travel: 'car', food: 'utensils', lodging: 'bed', fuel: 'fuel', other: 'receipt' };
+const CATEGORY_ICON = { travel: 'car', food: 'utensils', lodging: 'bed', fuel: 'fuel', parking: 'parking', gifting: 'gift', other: 'receipt' };
+const WORK_AREA_SHORT = { local: 'Local', outstation: 'Outstation' };
 
 const statusChip = (status) => h('span', { class: `chip ${status === 'approved' || status === 'rejected' ? status : ''}` }, capitalize(status));
 
@@ -152,7 +155,8 @@ export function renderExpenses(container, app, ctx) {
         h('span', { class: 'tile-icon' }, icon(CATEGORY_ICON[e.category] ?? 'receipt', 20)),
         h('span', { class: 'grow' },
           h('span', { class: 'title amt' }, rupees(e.amount_paise)),
-          h('span', { class: 'sub' }, `${capitalize(e.category)}${e.note ? ` · ${e.note}` : ''}`)),
+          h('span', { class: 'sub' }, [categoryLabel(e.category), e.work_area ? WORK_AREA_SHORT[e.work_area] : null, e.bill_type ? BILL_TYPE_LABELS[e.bill_type] : null].filter(Boolean).join(' · ')),
+          e.note ? h('span', { class: 'sub note' }, e.note) : null),
         h('span', { class: 'end' }, statusChip(e.status), e.has_bill ? h('span', { class: 'bill-flag', title: 'Has a bill photo' }, icon('image', 16)) : null)));
     }
 
@@ -171,7 +175,7 @@ export function renderExpenses(container, app, ctx) {
 // ---- Clients -----------------------------------------------------------------
 
 let clientQuery = '';
-let clientScope = 'all'; // 'all' | 'mine'
+let clientScope = 'all'; // 'all' | 'mine' | 'people' (people without a company)
 let clientPlace = '';
 
 // The search words and filters of the screens are kept while the app is open; when another rep (or the same one, after a lock) comes in
@@ -186,13 +190,14 @@ export function resetTabViews() {
 export function renderClients(container, app, ctx) {
   const store = app.store;
   const all = store.clients;
+  const alone = store.loosePeople; // people without a company
   const me = store.profile?.employee_code;
-  const list = h('div', { class: 'list' });
+  const list = h('div', { class: 'client-list' });
   const filters = h('div', { class: 'filters', role: 'group', 'aria-label': 'Whose clients' });
 
   // how many people are saved at each client (one pass)
   const people = new Map();
-  for (const p of store.contacts) people.set(p.client_id, (people.get(p.client_id) ?? 0) + 1);
+  for (const p of store.contacts) if (p.client_id) people.set(p.client_id, (people.get(p.client_id) ?? 0) + 1);
 
   const places = [...new Set(all.map((c) => c.city).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   if (clientPlace && !places.includes(clientPlace)) clientPlace = '';
@@ -206,8 +211,22 @@ export function renderClients(container, app, ctx) {
     draw();
   });
 
+  const companyRow = (c) => h('button', { class: 'item', onclick: () => openClientPage(app, c.id) },
+    h('span', { class: 'avatar' }, initials(c.name)),
+    h('span', { class: 'grow' },
+      h('span', { class: 'title' }, c.name),
+      h('span', { class: 'sub' }, [c.city, people.get(c.id) ? `${people.get(c.id)} ${people.get(c.id) === 1 ? 'person' : 'people'}` : 'No people yet', c.assigned_to_name && c.assigned_to_code !== me ? `Works with ${c.assigned_to_name}` : null].filter(Boolean).join(' · ')),
+      h('span', { class: 'sub added' }, `Added by ${store.addedBy(c)}`)));
+
+  const personRow = (p) => h('button', { class: 'item', onclick: () => openContactForm(app, { existing: p }) },
+    h('span', { class: 'avatar' }, initials(p.name)),
+    h('span', { class: 'grow' },
+      h('span', { class: 'title' }, p.name),
+      h('span', { class: 'sub' }, [p.position, p.phone].filter(Boolean).join(' · ') || 'No company'),
+      h('span', { class: 'sub added' }, `Added by ${store.addedBy(p)}`)));
+
   const draw = () => {
-    filters.replaceChildren(...[['all', 'All clients'], ['mine', 'Mine']].map(([value, label]) => h('button', {
+    filters.replaceChildren(...[['all', 'All'], ['mine', 'Mine'], ['people', 'People']].map(([value, label]) => h('button', {
       class: 'filter', 'aria-pressed': String(value === clientScope),
       onclick() {
         clientScope = value;
@@ -216,18 +235,35 @@ export function renderClients(container, app, ctx) {
     }, label)));
 
     const q = clientQuery.trim().toLowerCase();
-    const shown = all.filter((c) => (clientScope === 'all' || (me && c.assigned_to_code === me))
+
+    const companies = clientScope === 'people' ? [] : all.filter((c) => (clientScope === 'all' || (me && c.assigned_to_code === me))
       && (!clientPlace || c.city === clientPlace)
       && (!q || `${c.name} ${c.company} ${c.city} ${c.phone}`.toLowerCase().includes(q)
         || store.contactsOf(c.id).some((p) => `${p.name} ${p.phone} ${p.position}`.toLowerCase().includes(q))));
 
-    list.replaceChildren(...(shown.length
-      ? shown.map((c) => h('button', { class: 'item', onclick: () => openClientPage(app, c.id) },
-          h('span', { class: 'avatar' }, initials(c.name)),
-          h('span', { class: 'grow' },
-            h('span', { class: 'title' }, c.name),
-            h('span', { class: 'sub' }, [c.city, people.get(c.id) ? `${people.get(c.id)} ${people.get(c.id) === 1 ? 'person' : 'people'}` : 'No people yet', c.assigned_to_name && c.assigned_to_code !== me ? `Works with ${c.assigned_to_name}` : null].filter(Boolean).join(' · ')))))
-      : [empty('search', clientScope === 'mine' && !q && !clientPlace ? 'None given to you yet' : 'Nothing found', clientScope === 'mine' && !q && !clientPlace ? 'Clients your manager gives you, or that you add, show here.' : 'Try another name, person, number or place.')]));
+    // people without a company have no place, so a place filter leaves them out
+    const persons = clientPlace ? [] : alone.filter((p) => (clientScope !== 'mine' || store.canEdit(p))
+      && (!q || `${p.name} ${p.phone} ${p.position} ${p.email}`.toLowerCase().includes(q)));
+
+    const labelled = companies.length > 0 && persons.length > 0;
+    const parts = [
+      labelled ? h('p', { class: 'eyebrow list-label' }, `Companies (${companies.length})`) : null,
+      companies.length ? h('div', { class: 'list' }, companies.map(companyRow)) : null,
+      labelled ? h('p', { class: 'eyebrow list-label' }, `People without a company (${persons.length})`) : null,
+      persons.length ? h('div', { class: 'list' }, persons.map(personRow)) : null,
+    ];
+
+    if (!companies.length && !persons.length) {
+      const none = clientScope === 'mine' && !q && !clientPlace;
+      const onlyPeople = clientScope === 'people' && !q;
+      parts.push(empty(onlyPeople ? 'users' : 'search',
+        none ? 'None given to you yet' : onlyPeople ? 'No one here yet' : 'Nothing found',
+        none ? 'Clients your manager gives you, or that you add, show here.'
+          : onlyPeople ? 'Customers who buy on their own, with no company, show here. Use "Add contact person".'
+            : 'Try another name, person, number or place.'));
+    }
+
+    list.replaceChildren(...parts.filter(Boolean));
   };
 
   const search = h('input', { class: 'input', type: 'search', placeholder: 'Search clients, people or numbers', autocomplete: 'off', value: clientQuery, 'aria-label': 'Search clients' });
@@ -236,15 +272,16 @@ export function renderClients(container, app, ctx) {
     draw();
   });
 
+  const any = all.length > 0 || alone.length > 0;
+  const peopleWord = alone.length === 1 ? 'person' : 'people';
+
   draw();
   fill(container,
-    head({ eyebrow: `${all.length} in the pool`, title: 'Clients' }),
-    all.length ? filters : null,
-    all.length ? search : null,
-    places.length > 1 ? placeSelect : null,
-    all.length ? list : empty('users', 'No clients yet', 'Save the companies you deal with and the people who work there. Everybody on the team sees them.'),
+    head({ eyebrow: `${all.length} ${all.length === 1 ? 'company' : 'companies'}${alone.length ? ` · ${alone.length} ${peopleWord} on their own` : ''}`, title: 'Clients' }),
+    any ? h('div', { class: 'client-tools' }, filters, search, places.length > 1 && clientScope !== 'people' ? placeSelect : null) : null,
+    any ? list : empty('users', 'No clients yet', 'Save the companies you deal with and the people who work there. Everybody on the team sees them.'),
   );
-  ctx.fab('Add client', () => openClientForm(app));
+  ctx.fab('Add client', () => openClientForm(app), { label: 'Add contact person', onclick: () => openContactForm(app, { client: null }) });
 }
 
 // ---- Meetings ----------------------------------------------------------------

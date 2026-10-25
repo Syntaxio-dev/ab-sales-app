@@ -1,4 +1,5 @@
 import { NumberCell, toCsv } from '../core/csv.js';
+import { BILL_TYPE_LABELS, WORK_AREA_LABELS, categoryLabel } from '../core/rules.js';
 import { formatDay, formatDayTime, parseDay } from './format.js';
 
 // Builds export files from the store. They are made in memory and handed to the system share sheet
@@ -8,8 +9,11 @@ const money = (paise) => `${Math.floor(paise / 100)}.${String(paise % 100).padSt
 
 export function expensesCsv(store) {
   return toCsv([
-    ['Date', 'Category', 'Amount (INR)', 'Note', 'Has bill', 'Status', 'Id'],
-    ...store.expenses.map((e) => [formatDay(parseDay(e.expense_date)), e.category, new NumberCell(money(e.amount_paise)), e.note, e.has_bill ? 'yes' : 'no', e.status, e.id]),
+    ['Date', 'Category', 'Amount (INR)', 'Work area', 'Bill', 'Note', 'Has bill photo', 'Status', 'Id'],
+    ...store.expenses.map((e) => [
+      formatDay(parseDay(e.expense_date)), categoryLabel(e.category), new NumberCell(money(e.amount_paise)),
+      WORK_AREA_LABELS[e.work_area] ?? '', BILL_TYPE_LABELS[e.bill_type] ?? '', e.note, e.has_bill ? 'yes' : 'no', e.status, e.id,
+    ]),
   ]);
 }
 

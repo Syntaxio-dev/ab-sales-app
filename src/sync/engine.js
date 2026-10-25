@@ -26,10 +26,14 @@ export const KINDS = [
   { kind: 'call', wire: 'calls', log: true },
   { kind: 'report', wire: 'reports', log: true },
   { kind: 'note', wire: 'product_requests', log: true }, // a rep asks for a note in the product guide: only ever sent
+  { kind: 'script', wire: 'scripts' }, // the rep's own pitch for a product: private, comes back on a new phone
 ];
 
 const wireOf = {
-  expense: (r) => ({ uuid: r.id, category: r.category, amount_paise: r.amount_paise, expense_date: r.expense_date, note: r.note, has_bill: r.has_bill, updated_at: r.updated_at }),
+  expense: (r) => ({
+    uuid: r.id, category: r.category, amount_paise: r.amount_paise, expense_date: r.expense_date, note: r.note, work_area: r.work_area, bill_type: r.bill_type,
+    has_bill: r.has_bill, updated_at: r.updated_at,
+  }),
   client: (r) => ({ uuid: r.id, name: r.name, company: r.company, phone: r.phone, city: r.city, notes: r.notes, updated_at: r.updated_at }),
   contact: (r) => ({ uuid: r.id, client_uuid: r.client_id, name: r.name, position: r.position, phone: r.phone, email: r.email, notes: r.notes, updated_at: r.updated_at }),
   meeting: (r) => ({
@@ -45,6 +49,7 @@ const wireOf = {
     submitted_at: r.submitted_at, updated_at: r.updated_at,
   }),
   note: (r) => ({ uuid: r.id, product_uuid: r.product_id, product_name: r.product_name, body: r.body, updated_at: r.updated_at }),
+  script: (r) => ({ uuid: r.id, product_uuid: r.product_id, product_name: r.product_name, title: r.title, body: r.body, updated_at: r.updated_at }),
   call: (r) => ({
     uuid: r.id, direction: r.direction, number: r.number, client_uuid: r.client_id, contact_uuid: r.contact_id, client_name: r.client_name,
     contact_name: r.contact_name, started_at: r.started_at, duration_seconds: r.duration_seconds, updated_at: r.updated_at,
@@ -281,8 +286,8 @@ export class SyncEngine {
             await this.#store.markSynced(kind, record.id, record.updated_at);
             summary.pushed++;
             progressed++;
-          } else if (result?.status === 'rejected' && result.code === 'LOCKED') {
-            // the office already decided on it: take the office's version
+          } else if (result?.status === 'rejected' && ['LOCKED', 'NOT_ALLOWED'].includes(result.code)) {
+            // the office already decided on it, or it is somebody else's record: take the office's version
             await this.#store.markSynced(kind, record.id, record.updated_at);
             summary.fullPull = true;
             progressed++;

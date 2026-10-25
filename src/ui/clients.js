@@ -42,9 +42,11 @@ export function openClientPage(app, clientId) {
           line('Works with', client.assigned_to_name ? `${client.assigned_to_name}${mine ? ' (you)' : ''}` : 'Nobody yet'),
           line('Main number', client.phone),
           line('Group', client.company),
-          line('Added by', client.created_by_name),
+          line('Added by', store.addedBy(client)),
           line('Notes', client.notes)),
-        h('button', { class: 'btn small-btn block', style: { marginTop: '10px' }, onclick: () => openClientForm(app, client) }, icon('edit', 18), 'Edit client')),
+        store.canEdit(client)
+          ? h('button', { class: 'btn small-btn block', style: { marginTop: '10px' }, onclick: () => openClientForm(app, client) }, icon('edit', 18), 'Edit client')
+          : h('p', { class: 'muted small', style: { marginTop: '10px' } }, 'Only the rep who added this client, or your manager, can change it. You can add your own people to it.')),
 
       h('div', null,
         h('div', { class: 'section-head', style: { marginBottom: '10px' } }, h('p', { class: 'eyebrow' }, `People (${people.length})`),
@@ -54,7 +56,8 @@ export function openClientPage(app, clientId) {
             h('span', { class: 'avatar' }, initials(p.name)),
             h('span', { class: 'grow' },
               h('span', { class: 'title' }, p.name),
-              h('span', { class: 'sub' }, [p.position, p.phone].filter(Boolean).join(' · ') || 'No position or number yet')),
+              h('span', { class: 'sub' }, [p.position, p.phone].filter(Boolean).join(' · ') || 'No position or number yet'),
+              h('span', { class: 'sub added' }, `Added by ${store.addedBy(p)}`)),
             p.phone ? h('span', { class: 'item-actions' }, callButton(p.phone, `Call ${p.name}`)) : null)))
           : h('div', { class: 'card pad muted' }, 'Nobody is saved here yet. Add the people you can call: their calls are then matched by number.')),
 

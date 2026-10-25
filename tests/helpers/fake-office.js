@@ -5,11 +5,11 @@
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const error = (status, code, message, errors = {}) => json(status, { code, message, errors });
 
-const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries', 'calls', 'reports', 'product_requests'];
+const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries', 'calls', 'reports', 'product_requests', 'scripts'];
 const NOT_PULLED = new Set(['product_requests']); // a rep's request for a guide note only goes to the office
 const STATUSES = ['new', 'price_to_send', 'price_sent', 'callback', 'meeting_planned', 'negotiation', 'won', 'lost'];
 const SHARED = new Set(['clients', 'contacts']);
-const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries'];
+const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries', 'scripts'];
 const PRESETS = ['Owner / Director', 'Purchase Manager', 'Procurement Head', 'Lab Head', 'Quality (QC) Head', 'Production Head', 'Store Manager', 'Accounts', 'Other'];
 
 export class FakeOffice {
@@ -145,8 +145,9 @@ export class FakeOffice {
     if (kind === 'clients' && String(r.name ?? '').trim().length < 2) return 'The name is too short.';
     if (kind === 'contacts') {
       if (String(r.name ?? '').trim().length < 2) return 'The name is too short.';
-      if (typeof r.client_uuid !== 'string' || !/^[0-9a-f-]{36}$/i.test(r.client_uuid)) return 'The client id is not valid.';
+      if (r.client_uuid != null && (typeof r.client_uuid !== 'string' || !/^[0-9a-f-]{36}$/i.test(r.client_uuid))) return 'The client id is not valid.'; // null = no company
     }
+    if (kind === 'scripts' && (String(r.body ?? '').trim().length < 3 || String(r.product_name ?? '').trim().length < 2)) return 'The script is too short.';
     if (kind === 'meetings' && !String(r.client_name ?? '').trim()) return 'The client name is required.';
     if (kind === 'meetings' && r.contact_uuids !== undefined && (!Array.isArray(r.contact_uuids) || r.contact_uuids.length > 20)) return 'The people are not valid.';
     if (kind === 'enquiries') {
@@ -191,6 +192,8 @@ export class FakeOffice {
         const shared = SHARED.has(kind);
         if (row && !shared && row.owner !== userId) { results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'UUID_TAKEN', message: 'This id cannot be used.' }); continue; }
         if (row?.deleted) { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
+        // the pool is shared to read; only the rep who added a client or a person changes it
+        if (row && shared && row.owner !== userId) { results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'NOT_ALLOWED', message: 'Only the person who added it can change this.' }); continue; }
         if (row && (kind === 'calls' || kind === 'product_requests')) { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
         if (kind === 'product_requests' && !(String(r.body ?? '').trim().length >= 3 && String(r.product_name ?? '').trim().length >= 2)) {
           results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'INVALID', message: 'The request is too short.' });
@@ -239,10 +242,13 @@ export class FakeOffice {
   shape(kind, row) {
     const out = { ...row.data, deleted: row.deleted };
     if (kind === 'expenses') out.has_bill = this.bills.has(row.data.uuid);
-    if (kind === 'clients') {
+    if (kind === 'clients' || kind === 'contacts') {
       const added = this.userById(row.owner);
+      Object.assign(out, { created_by_code: added?.code ?? null, created_by_name: added?.name ?? null });
+    }
+    if (kind === 'clients') {
       const works = this.userById(row.assignedTo);
-      Object.assign(out, { created_by_code: added?.code ?? null, created_by_name: added?.name ?? null, assigned_to_code: works?.code ?? null, assigned_to_name: works?.name ?? null });
+      Object.assign(out, { assigned_to_code: works?.code ?? null, assigned_to_name: works?.name ?? null });
     }
     return out;
   }

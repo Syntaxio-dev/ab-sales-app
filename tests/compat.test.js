@@ -58,7 +58,7 @@ test('old records can be edited and saved again by the new code, and stay readab
   const { persist, store } = await openOld();
   const [expense] = store.expenses;
 
-  await store.saveExpense({ id: expense.id, category: expense.category, amount_paise: 99900, expense_date: expense.expense_date, note: 'edited' });
+  await store.saveExpense({ id: expense.id, category: expense.category, bill_type: 'with_bill', work_area: 'local', amount_paise: 99900, expense_date: expense.expense_date, note: 'edited' });
   await store.close();
 
   const again = await Store.open(persist, await testKey());

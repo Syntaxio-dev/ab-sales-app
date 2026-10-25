@@ -1,4 +1,5 @@
 import { normalizePhone } from '../core/phone.js';
+import { CLIENT_TYPE_IDS } from '../core/guide.js';
 import * as rules from '../core/rules.js';
 
 // What the office sends back is NOT trusted blindly: every record is checked with the same rules as a record typed on the phone
@@ -35,6 +36,8 @@ export function cleanExpense(r) {
     amount_paise: r.amount_paise,
     expense_date: r.expense_date,
     note: text(r.note, rules.MAX_NOTE),
+    work_area: rules.WORK_AREAS.includes(r.work_area) ? r.work_area : null, // an expense from an older app has neither
+    bill_type: rules.BILL_TYPES.includes(r.bill_type) ? r.bill_type : null,
     has_bill: hasBill,
     bill_synced: hasBill, // the office already holds the photo
     status: r.status,
@@ -137,17 +140,19 @@ export function cleanContact(r) {
 
   const updated = moment(r.updated_at);
   const name = text(r.name, 150);
-  if (!updated || name.length < 2 || typeof r.client_uuid !== 'string' || !UUID.test(r.client_uuid)) return null;
+  const hasClient = typeof r.client_uuid === 'string' && UUID.test(r.client_uuid);
+  if (!updated || name.length < 2 || (r.client_uuid != null && !hasClient)) return null; // no client_uuid = a person without a company
 
   return {
     id: r.uuid,
-    client_id: r.client_uuid,
+    client_id: hasClient ? r.client_uuid : null,
     name,
     position: text(r.position, 100),
     phone: normalizePhone(text(r.phone, 30)) ?? '',
     email: text(r.email, 150),
     notes: text(r.notes, rules.MAX_NOTE),
     created_by_code: r.created_by_code ? text(r.created_by_code, 30) : '', // '' = added by the office (not a rep)
+    created_by_name: r.created_by_name ? text(r.created_by_name, 100) : null,
     created_at: updated,
     updated_at: updated,
   };
@@ -235,6 +240,34 @@ export function cleanProduct(r) {
     short_term_problems: lines(r.short_term_problems, 40, 1000),
     long_term_problems: lines(r.long_term_problems, 40, 1000),
     top_brands: pairs(r.top_brands, 20, 'name', 'note', 150, 1000).filter((b) => b.name),
+    // "before the meeting" (all optional; an office without them sends nothing)
+    client_types: Array.isArray(r.client_types) ? [...new Set(r.client_types.filter((t) => CLIENT_TYPE_IDS.includes(t)))] : [],
+    pitch: text(r.pitch, 600),
+    key_notes: lines(r.key_notes, 5, 200),
+    formula: text(r.formula, 300),
+    do: lines(r.do, 3, 160),
+    avoid: lines(r.avoid, 3, 160),
+    match_rules: pairs(r.match_rules, 4, 'if', 'then', 200, 100).filter((m) => m.if && m.then),
+  };
+}
+
+// A rep's own script (private; it comes back on a new phone).
+export function cleanScript(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const updated = moment(r.updated_at);
+  const body = text(r.body, 3000);
+  const name = text(r.product_name, 200);
+  if (!updated || body.length < 3 || name.length < 2) return null;
+
+  return {
+    id: r.uuid,
+    product_id: typeof r.product_uuid === 'string' && UUID.test(r.product_uuid) ? r.product_uuid : null,
+    product_name: name,
+    title: text(r.title, 120),
+    body,
+    created_at: updated,
+    updated_at: updated,
   };
 }
 
@@ -256,7 +289,7 @@ export function cleanGuide(answer) {
 }
 
 // A request for a guide note only ever goes from the phone to the office: nothing comes back to be merged.
-export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null };
+export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null, script: cleanScript };
 
 // What to do with a record the office sent, given what the phone has:
 //  'create'  the phone does not have it (a new phone, or a restore)

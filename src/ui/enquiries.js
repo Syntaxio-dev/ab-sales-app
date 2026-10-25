@@ -4,6 +4,7 @@ import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
 import { formatDay, formatDayTime, formatTime, fromLocalInput, initials, rupees, toLocalInput } from './format.js';
 import { businessInput, numberInput, moneyInput, personInput } from './inputs.js';
+import { dateTimeInput } from './pickers.js';
 import { confirmDialog, field, openPage, toast, validate } from './kit.js';
 import { empty, fill, head } from './parts.js';
 import { callButton, openContactForm } from './people.js';
@@ -212,7 +213,7 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
   drawItems();
 
   const status = field('Status', h('select', { class: 'input' }, STATUSES.map((s) => h('option', { value: s.value, selected: s.value === (existing?.status ?? 'new') }, s.label))));
-  const followup = field('Follow-up (the app reminds you)', h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + 2 * 365 * 86_400_000 - 86_400_000)), value: existing ? (existing.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '') : toLocalInput(tomorrowAt10()) }), null, 'row');
+  const followup = field('Follow-up (the app reminds you)', dateTimeInput({ min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + 2 * 365 * 86_400_000 - 86_400_000)), value: existing ? (existing.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '') : toLocalInput(tomorrowAt10()), placeholder: 'No follow-up', pickerTitle: 'Follow-up' }), null, 'row');
   const clearFollowup = h('button', { type: 'button', class: 'link', onclick: () => { followup.input.value = ''; } }, 'No follow-up date');
   const note = field(existing ? 'Add a note (optional)' : 'First note (optional)', h('textarea', { class: 'input', maxLength: 500, rows: 3, placeholder: 'For example: wants the price by Friday, will buy before Diwali', value: '' }));
 
@@ -311,7 +312,7 @@ export function openEnquiryPage(app, id) {
   };
 
   const noteBox = h('textarea', { class: 'input', rows: 3, maxLength: 500, placeholder: 'What happened, what was said ...', 'aria-label': 'Note' });
-  const followBox = h('input', { class: 'input', type: 'datetime-local', min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + 2 * 365 * 86_400_000 - 86_400_000)), 'aria-label': 'Follow-up time' });
+  const followBox = dateTimeInput({ min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + 2 * 365 * 86_400_000 - 86_400_000)), placeholder: 'Set a follow-up', pickerTitle: 'Follow-up', 'aria-label': 'Follow-up time' });
 
   const draw = () => {
     const e = store.enquiryById(id);

@@ -49,21 +49,95 @@ test('a client and a person one rep adds reach the other rep, with who added it'
   assert.equal(b.store.contactsOf(client.id)[0].phone, '+919876543210');
 });
 
-test('either rep can improve a shared record: the newer change wins on both phones', async () => {
+test('the rep who added a client improves it; the other rep can only read it', async () => {
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
   const client = await a.store.saveClient({ name: 'JK Cement' });
   await a.engine.syncNow();
   await b.engine.syncNow();
 
+  assert.equal(a.store.canEdit(a.store.clientById(client.id)), true);
+  assert.equal(b.store.canEdit(b.store.clientById(client.id)), false);
+
+  // the phone itself refuses (the screen shows it read only) ...
+  await assert.rejects(() => b.store.saveClient({ id: client.id, name: 'JK Cement', city: 'Hacked' }), ValidationError);
+  assert.equal(b.store.clientById(client.id).city, '');
+
+  // ... and the owner's change reaches the other rep
   await new Promise((r) => setTimeout(r, 5));
-  await b.store.saveClient({ id: client.id, name: 'JK Cement', city: 'Nimbahera', notes: 'Ask for Rohit' });
+  await a.store.saveClient({ id: client.id, name: 'JK Cement', city: 'Nimbahera', notes: 'Ask for Rohit' });
+  await a.engine.syncNow();
+  await b.engine.syncNow();
+
+  assert.equal(b.store.clientById(client.id).city, 'Nimbahera');
+  assert.equal(b.store.clientById(client.id).notes, 'Ask for Rohit');
+  assert.equal(b.store.clientById(client.id).created_by_code, 'REP001', 'who added it does not change');
+});
+
+test('the office refuses a change to a record somebody else added, and the phone gets the real copy back', async () => {
+  const a = await phone({ code: 'REP001' });
+  const b = await phone({ code: 'REP002' });
+  const client = await a.store.saveClient({ name: 'JK Cement' });
+  await a.engine.syncNow();
+  await b.engine.syncNow();
+
+  // an older app, or a hand-made push (the store itself would refuse): rep 2 sends a change to rep 1's client
+  await new Promise((r) => setTimeout(r, 5));
+  const res = office.push(2, { clients: [{ uuid: client.id, name: 'Hacked', updated_at: new Date(Date.now() + 1000).toISOString() }], deleted: {} });
+  const json = await res.json();
+  assert.equal(json.results.clients[0].status, 'rejected');
+  assert.equal(json.results.clients[0].code, 'NOT_ALLOWED');
+
+  await a.engine.syncNow();
+  assert.equal(a.store.clientById(client.id).name, 'JK Cement');
+});
+
+test('a person can be saved without a company, and everybody sees who added them', async () => {
+  const a = await phone({ code: 'REP001' });
+  const b = await phone({ code: 'REP002' });
+
+  const alone = await a.store.saveContact({ client_id: null, name: 'Meena Joshi', phone: '98290 11223' });
+  assert.equal(alone.client_id, null);
+  assert.deepEqual(a.store.loosePeople.map((p) => p.name), ['Meena Joshi']);
+  assert.equal(a.store.addedBy(alone), 'You');
+
+  await a.engine.syncNow();
+  await b.engine.syncNow();
+
+  const seen = b.store.loosePeople;
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].client_id, null);
+  assert.equal(seen[0].created_by_code, 'REP001');
+  assert.equal(seen[0].created_by_name, 'Rep REP001');
+  assert.equal(b.store.addedBy(seen[0]), 'Rep REP001');
+  assert.equal(b.store.canEdit(seen[0]), false);
+  await assert.rejects(() => b.store.saveContact({ id: seen[0].id, client_id: null, name: 'Meena J' }), ValidationError);
+
+  // her number is in the pool: a call with it is matched, with no company name
+  const { matched } = await matchCalls([{ number: '9829011223', type: 2, date: Date.now(), duration: 60 }], b.store, 'REP002');
+  assert.equal(matched.length, 1);
+  assert.equal(matched[0].client_id, null);
+  assert.equal(matched[0].client_name, '');
+  assert.equal(matched[0].contact_name, 'Meena Joshi');
+  assert.match(b.store.numberOwner('+919829011223'), /^Meena Joshi$/);
+});
+
+test('a person can be added to somebody else\'s client, and stays that rep\'s own', async () => {
+  const a = await phone({ code: 'REP001' });
+  const b = await phone({ code: 'REP002' });
+  const client = await a.store.saveClient({ name: 'JK Cement' });
+  await a.engine.syncNow();
+  await b.engine.syncNow();
+
+  const mine = await b.store.saveContact({ client_id: client.id, name: 'Rohit Sharma', phone: '98765 43210' });
   await b.engine.syncNow();
   await a.engine.syncNow();
 
-  assert.equal(a.store.clientById(client.id).city, 'Nimbahera');
-  assert.equal(a.store.clientById(client.id).notes, 'Ask for Rohit');
-  assert.equal(a.store.clientById(client.id).created_by_code, 'REP001', 'who added it does not change');
+  const onA = a.store.contactById(mine.id);
+  assert.equal(onA.created_by_name, 'Rep REP002');
+  assert.equal(a.store.canEdit(onA), false);
+  assert.equal(b.store.canEdit(b.store.contactById(mine.id)), true);
+  assert.equal(a.store.contactsOf(client.id).length, 1);
 });
 
 test('who works a client is the office\'s decision and comes down to the phone', async () => {
@@ -314,7 +388,7 @@ test('a phone that held a sync cursor from before the pool still gets every shar
 test('a sync that is still running when the rep is switched writes nothing into the cleared phone', async () => {
   const b = await phone({ code: 'REP002' });
   await b.store.saveClient({ name: 'Shared Co' });
-  await b.store.saveExpense({ category: 'fuel', amount_paise: 500, expense_date: new Date().toISOString().slice(0, 10) });
+  await b.store.saveExpense({ category: 'fuel', bill_type: 'without_bill', work_area: 'local', amount_paise: 500, expense_date: new Date().toISOString().slice(0, 10) });
   await b.engine.syncNow();
 
   const app = appOn(new MemoryPersist());

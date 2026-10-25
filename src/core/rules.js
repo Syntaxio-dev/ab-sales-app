@@ -8,7 +8,21 @@ export const MAX_TEXT = 200;
 export const MAX_LONG_TEXT = 2000;
 export const MAX_EXPENSE_RUPEES = 1_000_000; // the office server will use the same limit
 export const MAX_BILL_BYTES = 5 * 1024 * 1024;
-export const CATEGORIES = ['travel', 'food', 'lodging', 'fuel', 'other'];
+// The keys are stored and sent to the office (never rename them); the labels are what the rep reads. "fuel" is shown as Petrol and
+// "other" as Miscellaneous. Lodging stays because older expenses use it.
+export const CATEGORIES = ['travel', 'food', 'fuel', 'parking', 'gifting', 'lodging', 'other'];
+export const CATEGORY_LABELS = { travel: 'Travel', food: 'Food', fuel: 'Petrol', parking: 'Parking charges', gifting: 'Gifting', lodging: 'Lodging', other: 'Miscellaneous' };
+export const categoryLabel = (key) => CATEGORY_LABELS[key] ?? String(key ?? '');
+
+// Where the money was spent (the office sees local work and outstation work apart) and whether a bill exists. Both must be chosen:
+// there is no default, so the rep never saves a wrong answer by not looking.
+export const WORK_AREAS = ['local', 'outstation'];
+export const WORK_AREA_LABELS = { local: 'Local (in Jaipur)', outstation: 'Outstation (outside Jaipur)' };
+export const BILL_TYPES = ['with_bill', 'without_bill'];
+export const BILL_TYPE_LABELS = { with_bill: 'With bill', without_bill: 'Without bill' };
+
+export const workArea = (value) => (WORK_AREAS.includes(value) ? null : 'Choose where the work was: local or outstation.');
+export const billType = (value) => (BILL_TYPES.includes(value) ? null : 'Choose if there is a bill or not.');
 
 // Control characters (a pasted NUL, a stray escape) have no business in a note or a name. A new line and a tab are fine in a note.
 const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;

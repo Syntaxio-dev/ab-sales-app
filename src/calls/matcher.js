@@ -53,9 +53,9 @@ export async function matchCalls(raw, store, repCode) {
       id: await callId(repCode, number, started, direction),
       direction,
       number,
-      client_id: who.client.id,
+      client_id: who.client?.id ?? null, // a person without a company has no client
       contact_id: who.contact?.id ?? null,
-      client_name: who.client.name,
+      client_name: who.client?.name ?? '',
       contact_name: who.contact?.name ?? '',
       started_at: new Date(started).toISOString(),
       duration_seconds: direction === 'missed' ? 0 : seconds,
