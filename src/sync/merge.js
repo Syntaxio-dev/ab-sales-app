@@ -1,5 +1,7 @@
 import { normalizePhone } from '../core/phone.js';
 import { CLIENT_TYPE_IDS } from '../core/guide.js';
+import { isSource } from '../core/enquiry.js';
+import { RESULTS, STATUSES as MEETING_STATUSES, validStartTime } from '../core/meeting.js';
 import * as rules from '../core/rules.js';
 
 // What the office sends back is NOT trusted blindly: every record is checked with the same rules as a record typed on the phone
@@ -101,6 +103,7 @@ export function cleanEnquiry(r) {
     contact_id: typeof r.contact_uuid === 'string' && UUID.test(r.contact_uuid) ? r.contact_uuid : null,
     contact_name: text(r.contact_name, 150),
     status: r.status,
+    source: isSource(r.source) ? r.source : null, // an office that does not know the field sends none
     items,
     opened_at: opened,
     next_followup_at: r.next_followup_at ? moment(r.next_followup_at) : null,
@@ -204,6 +207,37 @@ export function cleanMeeting(r) {
     discussion: text(r.discussion, rules.MAX_LONG_TEXT),
     outcome: text(r.outcome, rules.MAX_TEXT),
     next_followup_at: followup,
+    // planning fields (an office that does not know them sends none: the meeting is then an ordinary, logged one)
+    status: MEETING_STATUSES.includes(r.status) ? r.status : 'done',
+    scheduled_at: r.scheduled_at ? moment(r.scheduled_at) : null,
+    ended_at: r.ended_at ? moment(r.ended_at) : null,
+    route_id: typeof r.route_uuid === 'string' && UUID.test(r.route_uuid) ? r.route_uuid : null,
+    result: RESULTS.some((x) => x.value === r.result) ? r.result : null,
+    moved_from: r.moved_from ? moment(r.moved_from) : null,
+    time_manual: r.time_manual === true,
+    created_at: updated,
+    updated_at: updated,
+  };
+}
+
+// A route: the stops of one day, one rep (the office only ever sends a rep their own).
+export function cleanRoute(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const updated = moment(r.updated_at);
+  const date = typeof r.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.date) ? r.date : null;
+  const order = Array.isArray(r.stops_order) ? [...new Set(r.stops_order.filter((s) => typeof s === 'string' && UUID.test(s)))].slice(0, 10) : [];
+  if (!updated || !date || !order.length) return null;
+
+  return {
+    id: r.uuid,
+    rep_id: null,
+    date,
+    title: text(r.title, 60) || 'Route',
+    area: text(r.area, 100),
+    start_time: validStartTime(r.start_time) ? r.start_time : '09:00',
+    overnight: r.overnight === true,
+    stops_order: order,
     created_at: updated,
     updated_at: updated,
   };
@@ -289,7 +323,7 @@ export function cleanGuide(answer) {
 }
 
 // A request for a guide note only ever goes from the phone to the office: nothing comes back to be merged.
-export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null, script: cleanScript };
+export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, route: cleanRoute, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null, script: cleanScript };
 
 // What to do with a record the office sent, given what the phone has:
 //  'create'  the phone does not have it (a new phone, or a restore)

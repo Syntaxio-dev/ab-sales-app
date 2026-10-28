@@ -1,13 +1,12 @@
-import { STATUSES, budgetTotal, byUrgency, isOpen, itemsSummary, needsAction, statusLabel, urgency } from '../core/enquiry.js';
-import * as rules from '../core/rules.js';
+import { STATUSES, budgetTotal, byUrgency, isOpen, itemsSummary, needsAction, sourceLabel, statusLabel, urgency } from '../core/enquiry.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
-import { formatDay, formatDayTime, formatTime, fromLocalInput, initials, rupees, toLocalInput } from './format.js';
-import { businessInput, numberInput, moneyInput, personInput } from './inputs.js';
+import { openEnquiryForm } from './enquiry-form.js';
+import { formatDay, formatDayTime, formatTime, fromLocalInput, initials, rupees, tenAmIn, toLocalInput } from './format.js';
 import { dateTimeInput } from './pickers.js';
-import { confirmDialog, field, openPage, toast, validate } from './kit.js';
+import { confirmDialog, openPage, toast } from './kit.js';
 import { empty, fill, head } from './parts.js';
-import { callButton, openContactForm } from './people.js';
+import { callButton } from './people.js';
 
 // Enquiries: what a client asked a rep for ("price of an oven and a furnace"), the follow-ups, and the notes until it is won or lost.
 // One enquiry can ask for several products at once. The manager reads all of it on the website.
@@ -123,168 +122,11 @@ export function needsActionCard(app, ctx) {
     h('div', { class: 'list' }, items.slice(0, 4).map((e) => enquiryRow(app, e, now))));
 }
 
-// ---- writing an enquiry ------------------------------------------------------------------------------------------
+// ---- writing an enquiry: the three-step form lives in enquiry-form.js ---------------------------------------------
 
-const tomorrowAt10 = (days = 1) => {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  d.setHours(10, 0, 0, 0);
-  return d;
-};
+const tomorrowAt10 = tenAmIn;
 
-export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
-  const store = app.store;
-  const OTHER = '__other__';
-  const clients = store.clients;
-  const wanted = existing?.client_id ?? preset.client_id ?? null;
-  const known = wanted && clients.some((c) => c.id === wanted);
-  const startOn = known ? wanted : existing || !clients.length ? OTHER : '';
-
-  const client = field('Client', h('select', { class: 'input' },
-    clients.length && !known && !existing ? h('option', { value: '' }, 'Choose a client') : null,
-    ...clients.map((c) => h('option', { value: c.id, selected: known && c.id === wanted }, c.city ? `${c.name} (${c.city})` : c.name)),
-    h('option', { value: OTHER, selected: startOn === OTHER }, 'Someone else (type the name)')));
-  const typedClient = field('Client name', businessInput({ value: known ? '' : existing?.client_name ?? '' }));
-  const typedPerson = field('Person who asked (optional)', personInput({ value: known ? '' : existing?.contact_name ?? '' }));
-
-  // who asked: chips of the people saved at the client (tap again to unselect)
-  let person = existing?.contact_id && store.contactById(existing.contact_id) ? existing.contact_id : null;
-  const people = h('div', { class: 'stack' });
-
-  const drawPeople = () => {
-    const chosen = client.input.value === OTHER ? null : store.clientById(client.input.value);
-    if (!chosen) {
-      people.replaceChildren();
-      return;
-    }
-
-    const list = store.contactsOf(chosen.id);
-    if (person && !list.some((p) => p.id === person)) person = null;
-
-    people.replaceChildren(
-      h('p', { class: 'eyebrow' }, 'Who asked (optional)'),
-      list.length ? h('div', { class: 'people' }, list.map((p) => h('button', {
-        type: 'button', class: 'filter', 'aria-pressed': String(person === p.id),
-        onclick() {
-          person = person === p.id ? null : p.id;
-          drawPeople();
-        },
-      }, p.position ? `${p.name} · ${p.position}` : p.name))) : h('p', { class: 'muted small' }, 'Nobody is saved at this client yet.'),
-      h('button', { type: 'button', class: 'link', style: { textAlign: 'left', padding: '4px 0' }, onclick: () => openContactForm(app, { client: chosen, onSaved: (p) => { person = p.id; drawPeople(); } }) }, '+ Add a person'));
-  };
-
-  const syncClient = () => {
-    const other = client.input.value === OTHER;
-    typedClient.el.hidden = !other;
-    typedPerson.el.hidden = !other;
-    drawPeople();
-  };
-  client.input.addEventListener('change', () => {
-    syncClient();
-    client.setError(null);
-  });
-
-  // the products: one block each, "+ Add another product" for more
-  const asked = [...new Set(store.enquiries.flatMap((e) => e.items.map((i) => i.product)))].slice(0, 40);
-  const list = h('datalist', { id: 'asked-products' }, asked.map((name) => h('option', { value: name })));
-  const blocks = [];
-  const itemsBox = h('div', { class: 'stack' });
-
-  const paiseToText = (paise) => (paise === null || paise === undefined ? '' : paise % 100 === 0 ? String(paise / 100) : (paise / 100).toFixed(2));
-
-  const addBlock = (item = {}) => {
-    const product = field('Product', businessInput({ list: 'asked-products', placeholder: 'For example Muffle Furnace', value: item.product ?? '' }));
-    const brands = field('Preferred brands (optional)', businessInput({ placeholder: 'For example Remi, Labtech', value: item.brands ?? '' }));
-    const quantity = field('Quantity', numberInput({ value: String(item.quantity ?? 1) }));
-    const budget = field('Budget in rupees (optional)', moneyInput({ placeholder: 'Total for this product', value: paiseToText(item.budget_paise) }));
-    const remove = h('button', { type: 'button', class: 'link', onclick() { blocks.splice(blocks.indexOf(block), 1); drawItems(); } }, 'Remove this product');
-    const block = { product, brands, quantity, budget, remove, el: h('div', { class: 'card pad stack' }) };
-    blocks.push(block);
-  };
-
-  const drawItems = () => {
-    blocks.forEach((b, n) => {
-      b.el.replaceChildren(h('p', { class: 'eyebrow', style: { marginBottom: 0 } }, `Product ${n + 1}`), b.product.el, b.brands.el, h('div', { class: 'grid2' }, b.quantity.el, b.budget.el), blocks.length > 1 ? b.remove : null);
-    });
-    itemsBox.replaceChildren(...blocks.map((b) => b.el), blocks.length < 10 ? h('button', { type: 'button', class: 'btn small-btn block', onclick() { addBlock(); drawItems(); } }, icon('plus', 18), 'Add another product') : null);
-  };
-
-  (existing?.items?.length ? existing.items : [{}]).forEach((i) => addBlock(i));
-  drawItems();
-
-  const status = field('Status', h('select', { class: 'input' }, STATUSES.map((s) => h('option', { value: s.value, selected: s.value === (existing?.status ?? 'new') }, s.label))));
-  const followup = field('Follow-up (the app reminds you)', dateTimeInput({ min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + 2 * 365 * 86_400_000 - 86_400_000)), value: existing ? (existing.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '') : toLocalInput(tomorrowAt10()), placeholder: 'No follow-up', pickerTitle: 'Follow-up' }), null, 'row');
-  const clearFollowup = h('button', { type: 'button', class: 'link', onclick: () => { followup.input.value = ''; } }, 'No follow-up date');
-  const note = field(existing ? 'Add a note (optional)' : 'First note (optional)', h('textarea', { class: 'input', maxLength: 500, rows: 3, placeholder: 'For example: wants the price by Friday, will buy before Diwali', value: '' }));
-
-  const save = h('button', { class: 'btn primary block' }, existing ? 'Save enquiry' : 'Save enquiry');
-  save.addEventListener('click', async () => {
-    const other = client.input.value === OTHER;
-    const chosen = other ? null : store.clientById(client.input.value);
-    const clientName = chosen ? chosen.name : typedClient.input.value;
-    const followAt = fromLocalInput(followup.input.value);
-
-    const items = [];
-    const checks = [
-      [client, client.input.value === '' ? 'Choose a client, or pick "Someone else" and type the name.' : null],
-      [typedClient, other ? rules.businessName(typedClient.input.value, { label: 'Client name' }) : null],
-      [typedPerson, other ? rules.personName(typedPerson.input.value, { label: 'Person', requiredField: false }) : null],
-    ];
-
-    for (const b of blocks) {
-      const qtyText = b.quantity.input.value.trim();
-      const qty = qtyText === '' ? 1 : Number(qtyText);
-      const budgetText = b.budget.input.value.trim();
-      const paise = budgetText === '' ? null : rules.parsePaise(budgetText);
-
-      checks.push(
-        [b.product, rules.businessName(b.product.input.value, { label: 'Product' })],
-        [b.brands, rules.businessName(b.brands.input.value, { label: 'Brands', requiredField: false })],
-        [b.quantity, qtyText === '' ? null : rules.wholeNumber(qtyText)],
-        [b.budget, budgetText !== '' && (paise === null || paise > 100_000_000_00) ? 'Write the budget as a number, for example 150000.' : null],
-      );
-      items.push({ product: b.product.input.value, brands: b.brands.input.value, quantity: qty, budget_paise: paise });
-    }
-    checks.push(
-      [status, null],
-      [followup, followup.input.value && !followAt ? 'Pick a valid date and time.' : null],
-      [note, rules.optional(note.input.value, { max: 500, label: 'Note' })],
-    );
-    if (!validate(checks)) return;
-
-    save.disabled = true;
-    try {
-      const person_ = chosen && person ? store.contactById(person) : null;
-      const saved = await store.saveEnquiry({
-        id: existing?.id,
-        client_id: chosen?.id ?? null,
-        client_name: clientName,
-        contact_id: person_?.id ?? null,
-        contact_name: chosen ? (person_?.name ?? '') : typedPerson.input.value,
-        status: status.input.value,
-        items,
-        next_followup_at: followAt ? followAt.toISOString() : null,
-        note: note.input.value,
-      });
-      page.close();
-      if (!existing) openEnquiryPage(app, saved.id);
-    } catch (error) {
-      toast(error instanceof ValidationError ? error.message : 'Could not save. Please try again.');
-      save.disabled = false;
-    }
-  });
-
-  const page = openPage({
-    title: existing ? 'Edit enquiry' : 'New enquiry',
-    body: h('div', { class: 'stack' },
-      client.el, typedClient.el, people, typedPerson.el,
-      list, itemsBox,
-      status.el, followup.el, clearFollowup, note.el),
-    footer: save,
-  });
-
-  syncClient();
-}
+export { openEnquiryForm };
 
 // ---- one enquiry ----------------------------------------------------------------------------------------------------
 
@@ -303,6 +145,7 @@ export function openEnquiryPage(app, id) {
       await store.saveEnquiry({
         id: e.id, client_id: e.client_id, client_name: e.client_name, contact_id: e.contact_id, contact_name: e.contact_name, items: e.items,
         status: patch.status ?? e.status,
+        source: e.source,
         next_followup_at: 'next_followup_at' in patch ? patch.next_followup_at : e.next_followup_at,
         note: patch.note ?? '',
       });
@@ -338,7 +181,7 @@ export function openEnquiryPage(app, id) {
             h('h2', { style: { fontSize: '19px' } }, e.client_name),
             e.contact_name ? h('p', { class: 'muted' }, `${e.contact_name}${person?.position ? ` · ${person.position}` : ''}`) : null),
           phone ? callButton(phone) : null),
-        h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' } }, statusChip(e.status), followupChip(e, now), h('span', { class: 'chip' }, `Opened ${formatDay(new Date(e.opened_at))}`))),
+        h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' } }, statusChip(e.status), followupChip(e, now), e.source ? h('span', { class: 'chip' }, `via ${sourceLabel(e.source)}`) : null, h('span', { class: 'chip' }, `Opened ${formatDay(new Date(e.opened_at))}`))),
 
       h('div', null,
         h('div', { class: 'section-head', style: { marginBottom: '10px' } }, h('p', { class: 'eyebrow' }, `Asked for (${e.items.length})`), h('button', { class: 'link', onclick: () => openEnquiryForm(app, { existing: e }) }, 'Edit')),

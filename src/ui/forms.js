@@ -1,13 +1,12 @@
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
-import { capitalize, dayString, formatDay, fromLocalInput, rupees, toLocalInput } from './format.js';
+import { capitalize, dayString, formatDay, rupees } from './format.js';
 import { businessInput, cityPicks, phoneField, placeInput } from './inputs.js';
 import { chipGroup, confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
-import { dateInput, dateTimeInput } from './pickers.js';
+import { dateInput } from './pickers.js';
 import { openContactForm } from './people.js';
 
-const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up further ahead than this
 
 const TOMORROW = () => new Date(Date.now() + 86_400_000);
 
@@ -249,123 +248,6 @@ export function openClientForm(app, existing = null) {
       existing && store.canDelete(existing) ? deleteButton('Delete client', async () => {
         if (await confirmDialog({ title: `Delete ${existing.name}?`, text: 'The client and the people saved under it leave the pool for the whole team. Old meetings keep the name. This cannot be undone.' })) {
           await store.deleteClient(existing.id);
-          page.close();
-        }
-      }) : null),
-    footer: save,
-  });
-}
-
-// ---- meeting -----------------------------------------------------------------
-
-export function openMeetingForm(app, existing = null, preset = {}) {
-  const store = app.store;
-  const OTHER = '__other__';
-  const clients = store.clients;
-  const wanted = existing?.client_id ?? preset.client_id ?? null;
-  const known = wanted && clients.some((c) => c.id === wanted);
-
-  // With saved clients the box starts on "Choose a client" (never silently on "someone else"); without any it goes straight to typing.
-  const startOn = known ? wanted : existing || !clients.length ? OTHER : '';
-  const client = field('Client', h('select', { class: 'input' },
-    clients.length && !known && !existing ? h('option', { value: '', selected: startOn === '' }, 'Choose a client') : null,
-    clients.map((c) => h('option', { value: c.id, selected: known && c.id === wanted }, c.city ? `${c.name} (${c.city})` : c.name)),
-    h('option', { value: OTHER, selected: startOn === OTHER }, 'Someone else (type the name)')));
-  const typed = field('Client name', businessInput({ value: known ? '' : existing?.client_name ?? '' }));
-  const when = field('When', dateTimeInput({ min: '2020-01-01T00:00', max: toLocalInput(TOMORROW()), value: toLocalInput(existing ? new Date(existing.meeting_at) : new Date()), pickerTitle: 'When was the meeting?' }), null, 'row');
-  const purpose = field('Purpose (optional)', h('input', { class: 'input', type: 'text', maxLength: rules.MAX_TEXT, autocomplete: 'off', value: existing?.purpose ?? '' }));
-  const discussion = field('What was discussed (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_LONG_TEXT, rows: 5, value: existing?.discussion ?? '' }));
-  const outcome = field('Outcome (optional)', h('input', { class: 'input', type: 'text', maxLength: rules.MAX_TEXT, autocomplete: 'off', value: existing?.outcome ?? '' }));
-  const followup = field('Follow-up (optional)', dateTimeInput({ min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + TWO_YEARS - 86_400_000)), value: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '', placeholder: 'No follow-up', pickerTitle: 'Follow-up' }), null, 'row');
-  const clearFollowup = h('button', { class: 'link', onclick: () => { followup.input.value = ''; } }, 'Remove follow-up');
-
-  // the people met: chips of the people saved at the chosen client, plus a way to add one on the spot
-  const met = new Set((existing?.contact_ids ?? []).filter((id) => store.contactById(id)));
-  const people = h('div', { class: 'stack' });
-
-  const drawPeople = () => {
-    const chosenClient = client.input.value === OTHER ? null : store.clientById(client.input.value);
-    if (!chosenClient) {
-      people.replaceChildren();
-      return;
-    }
-
-    const list = store.contactsOf(chosenClient.id);
-    for (const id of [...met]) if (!list.some((p) => p.id === id)) met.delete(id); // a person of another client was selected before
-
-    people.replaceChildren(
-      h('p', { class: 'eyebrow' }, 'People you met (optional)'),
-      list.length
-        ? h('div', { class: 'people' }, list.map((p) => h('button', {
-          type: 'button',
-          class: 'filter',
-          'aria-pressed': String(met.has(p.id)),
-          onclick() {
-            if (met.has(p.id)) met.delete(p.id);
-            else met.add(p.id);
-            drawPeople();
-          },
-        }, p.position ? `${p.name} · ${p.position}` : p.name)))
-        : h('p', { class: 'muted small' }, 'Nobody is saved at this client yet.'),
-      h('button', {
-        type: 'button',
-        class: 'link',
-        style: { textAlign: 'left', padding: '4px 0' },
-        onclick: () => openContactForm(app, { client: chosenClient, onSaved: (person) => { met.add(person.id); drawPeople(); } }),
-      }, '+ Add a person I met'),
-    );
-  };
-
-  const syncTyped = () => {
-    typed.el.hidden = client.input.value !== OTHER;
-    drawPeople();
-  };
-  client.input.addEventListener('change', () => {
-    syncTyped();
-    client.setError(null);
-  });
-  syncTyped();
-
-  const save = saveButton('Save meeting');
-  save.addEventListener('click', async () => {
-    const chosen = client.input.value === OTHER ? null : store.clientById(client.input.value);
-    const clientName = chosen ? chosen.name : typed.input.value;
-
-    const meetingAt = fromLocalInput(when.input.value);
-    const followupAt = fromLocalInput(followup.input.value);
-
-    const ok = validate([
-      [client, client.input.value === '' ? 'Choose a client, or pick "Someone else" and type the name.' : null],
-      [typed, client.input.value === '' || chosen ? null : rules.businessName(typed.input.value, { label: 'Client name' })],
-      [when, meetingAt ? null : 'Pick the date and time.'],
-      [purpose, rules.optional(purpose.input.value, { max: rules.MAX_TEXT, label: 'Purpose' })],
-      [discussion, rules.optional(discussion.input.value, { max: rules.MAX_LONG_TEXT, label: 'Discussion' })],
-      [outcome, rules.optional(outcome.input.value, { max: rules.MAX_TEXT, label: 'Outcome' })],
-      [followup, followup.input.value && !followupAt ? 'Pick a valid date and time.' : followupAt && meetingAt && followupAt < meetingAt ? 'Follow-up must be after the meeting.' : followupAt && followupAt.getTime() > Date.now() + TWO_YEARS ? 'A follow-up can be at most 2 years ahead.' : null],
-    ]);
-    if (!ok) return;
-
-    const done = await submit(save, () => store.saveMeeting({
-      id: existing?.id,
-      client_id: chosen?.id ?? null,
-      client_name: clientName,
-      contact_ids: chosen ? [...met] : [],
-      meeting_at: meetingAt.toISOString(),
-      purpose: purpose.input.value,
-      discussion: discussion.input.value,
-      outcome: outcome.input.value,
-      next_followup_at: followupAt ? followupAt.toISOString() : null,
-    }));
-    if (done) page.close();
-  });
-
-  const page = openPage({
-    title: existing ? 'Edit meeting' : 'New meeting',
-    body: h('div', { class: 'stack' },
-      client.el, typed.el, people, when.el, purpose.el, discussion.el, outcome.el, followup.el, clearFollowup,
-      existing ? deleteButton('Delete meeting', async () => {
-        if (await confirmDialog({ title: 'Delete this meeting?', text: `Meeting with ${existing.client_name} on ${formatDay(new Date(existing.meeting_at))}.` })) {
-          await store.deleteMeeting(existing.id);
           page.close();
         }
       }) : null),

@@ -26,10 +26,10 @@ export function clientsCsv(store) {
 
 export function meetingsCsv(store) {
   return toCsv([
-    ['When', 'Client', 'Purpose', 'Discussion', 'Outcome', 'Follow-up', 'Id'],
+    ['When', 'Client', 'Purpose', 'Discussion', 'Outcome', 'Follow-up', 'Status', 'Result', 'Planned for', 'Id'],
     ...store.meetings.map((m) => [
       formatDayTime(new Date(m.meeting_at)), m.client_name, m.purpose, m.discussion, m.outcome,
-      m.next_followup_at ? formatDayTime(new Date(m.next_followup_at)) : '', m.id,
+      m.next_followup_at ? formatDayTime(new Date(m.next_followup_at)) : '', m.status ?? 'done', m.result ?? '', m.scheduled_at ? formatDayTime(new Date(m.scheduled_at)) : '', m.id,
     ]),
   ]);
 }

@@ -1,6 +1,7 @@
 import * as rules from '../core/rules.js';
 import { normalizePhone } from '../core/phone.js';
 import * as enquiryRules from '../core/enquiry.js';
+import * as meetingRules from '../core/meeting.js';
 import { CLIENT_TYPE_IDS, withGuideDefaults } from '../core/guide.js';
 import { PRESET_POSITIONS, cleanPosition, positionKey } from '../core/positions.js';
 import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/crypto.js';
@@ -15,7 +16,7 @@ import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/cr
 
 export class ValidationError extends Error {}
 
-const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', script: 's:', bill: 'b:', tomb: 't:' };
+const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', route: 'o:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', script: 's:', bill: 'b:', tomb: 't:' };
 const PROFILE_KEY = 'profile';
 const SYNC_KEY = 'sync';
 const PREFS_KEY = 'prefs';
@@ -23,7 +24,7 @@ const POSITIONS_KEY = 'positions';
 const GUIDE_KEY = 'guide'; // the product guide (written by the manager; this phone only reads it)
 const PROGRESS_KEY = 'guideprogress'; // the rep's own place in the guide: ticks, learned products, last client type (ids and booleans only)
 // the order the records are sent in: a client before the people at it
-const KINDS = ['expense', 'client', 'contact', 'meeting', 'enquiry', 'call', 'report', 'note', 'script'];
+const KINDS = ['expense', 'client', 'contact', 'meeting', 'route', 'enquiry', 'call', 'report', 'note', 'script'];
 const MAX_NOTES_KEPT = 60; // requests for a guide note that were sent are kept as a short history
 
 // UPDATES KEEP THE DATA. Phones that already hold records get a newer app over the old one, so a newer version must be able
@@ -36,9 +37,11 @@ const DEFAULTS = {
   // assigned_to_* and created_by_* are the office's: the phone shows them and never changes them
   client: { company: '', phone: '', city: '', notes: '', assigned_to_code: null, assigned_to_name: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
   contact: { client_id: null, position: '', phone: '', email: '', notes: '', created_by_code: null, created_by_name: null, synced: false, sync_error: null },
-  meeting: { client_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, synced: false, sync_error: null },
+  // status 'done' = an old meeting (written after it happened); the other new fields are for planned meetings and routes
+  meeting: { client_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, status: 'done', scheduled_at: null, ended_at: null, route_id: null, result: null, moved_from: null, time_manual: false, synced: false, sync_error: null },
+  route: { rep_id: null, date: '', title: '', area: '', start_time: '09:00', overnight: false, stops_order: [], synced: false, sync_error: null },
   call: { direction: 'outgoing', number: '', client_id: null, contact_id: null, client_name: '', contact_name: '', duration_seconds: 0, synced: false, sync_error: null },
-  enquiry: { client_id: null, client_name: '', contact_id: null, contact_name: '', status: 'new', items: [], next_followup_at: null, closed_at: null, timeline: [], synced: false, sync_error: null },
+  enquiry: { client_id: null, client_name: '', contact_id: null, contact_name: '', status: 'new', source: null, items: [], next_followup_at: null, closed_at: null, timeline: [], synced: false, sync_error: null },
   report: { notes: '', tomorrow_plan: '', issues: '', figures: {}, submitted_at: null, synced: false, sync_error: null },
   // a rep's request to the manager: "please add / correct this in the product guide"
   note: { product_id: null, product_name: '', body: '', synced: false, sync_error: null },
@@ -52,7 +55,7 @@ const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up furthe
 // Every method that changes data. They run ONE AT A TIME, in the order they were called: a save made while the sync is
 // bookkeeping the same record can then never be overwritten by an older copy (two writes finishing in the wrong order).
 const MUTATORS = [
-  'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveContact', 'deleteContact', 'saveMeeting', 'deleteMeeting',
+  'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveContact', 'deleteContact', 'saveMeeting', 'deleteMeeting', 'saveRoute', 'deleteRoute',
   'saveEnquiry', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
   'saveNote', 'setGuideFromServer', 'saveScript', 'deleteScript', 'tickGuideQuestion', 'resetGuideTicks', 'setGuideLearned', 'setGuideClientType',
   'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced',
@@ -92,6 +95,7 @@ export class Store {
   #clients = new Map();
   #contacts = new Map();
   #meetings = new Map();
+  #routes = new Map();
   #enquiries = new Map();
   #reports = new Map();
   #calls = new Map();
@@ -160,6 +164,7 @@ export class Store {
     this.#clients.clear();
     this.#contacts.clear();
     this.#meetings.clear();
+    this.#routes.clear();
     this.#enquiries.clear();
     this.#reports.clear();
     this.#calls.clear();
@@ -541,7 +546,7 @@ export class Store {
 
   /**
    * input: { id?, client_id, client_name, contact_id, contact_name, status, items: [{ product, brands, quantity, budget_paise }],
-   *          next_followup_at (ISO|null), note }
+   *          next_followup_at (ISO|null), source ('call' | 'walkin' | 'whatsapp' | 'reference' | null; left out = keep what is stored), note }
    * A note, or a change of status, is added to the enquiry's timeline with the time. Closing (won / lost) clears the follow-up.
    */
   async saveEnquiry(input) {
@@ -558,6 +563,7 @@ export class Store {
       rules.required(input.client_name, { min: 2, max: 150, label: 'Client name' }),
       rules.optional(input.contact_name, { max: 150, label: 'Person' }),
       enquiryRules.isStatus(input.status) ? null : 'Pick a status.',
+      input.source === undefined || input.source === null || enquiryRules.isSource(input.source) ? null : 'Pick how the enquiry came through, or leave it empty.',
       items.length < 1 ? 'Add at least one product.' : items.length > enquiryRules.MAX_ITEMS ? `At most ${enquiryRules.MAX_ITEMS} products in one enquiry.` : null,
       ...items.flatMap((i, n) => [
         rules.required(i.product, { min: 2, max: 150, label: `Product ${n + 1}` }),
@@ -587,6 +593,7 @@ export class Store {
       contact_id: input.contact_id ?? null,
       contact_name: String(input.contact_name ?? '').trim(),
       status: input.status,
+      source: input.source === undefined ? (old?.source ?? null) : input.source,
       items,
       opened_at: old?.opened_at ?? now,
       next_followup_at: closed || followup === null ? null : new Date(followup).toISOString(),
@@ -908,41 +915,116 @@ export class Store {
     await this.#saveProgress();
   }
 
-  // ---- meetings --------------------------------------------------------------
+  // ---- meetings and routes ---------------------------------------------------
 
   // Newest meeting first.
   get meetings() {
     return [...this.#meetings.values()].sort((a, b) => b.meeting_at.localeCompare(a.meeting_at));
   }
 
-  // input: { id?, client_id, client_name, meeting_at (ISO), purpose, discussion, outcome, next_followup_at (ISO|null) }
+  meetingById(id) {
+    return (id && this.#meetings.get(id)) || null;
+  }
+
+  // The rep's routes, earliest day first. (The phone only ever holds the signed-in rep's own records; a route that names another rep is not shown.)
+  get routes() {
+    const mine = this.#profile?.employee_code ?? null;
+    return [...this.#routes.values()]
+      .filter((r) => !r.rep_id || !mine || r.rep_id === mine)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.start_time.localeCompare(b.start_time));
+  }
+
+  routeById(id) {
+    return (id && this.#routes.get(id)) || null;
+  }
+
+  // The meetings of a route in the route's order.
+  routeStops(routeId) {
+    const route = this.#routes.get(routeId);
+    return route ? meetingRules.stopsOf(route, [...this.#meetings.values()]) : [];
+  }
+
+  /**
+   * input: { id?, client_id, client_name, contact_ids, meeting_at (ISO), purpose, discussion, outcome, next_followup_at (ISO|null),
+   *          status ('planned' | 'done' | 'missed' | 'moved'; left out = keep what is stored, or 'done' for a new one),
+   *          scheduled_at (ISO|null: the plan), ended_at, route_id, result, moved_from, time_manual }
+   * A planned meeting can be today up to 90 days ahead (never on a day that has passed); one that happened can be written up to a day ahead.
+   * A stop moved to another day leaves its route; the last stop leaving deletes the route.
+   */
   async saveMeeting(input) {
+    const id = input.id ?? crypto.randomUUID();
+    const old = this.#meetings.get(id);
+    const keep = (name, fallback = null) => (input[name] === undefined ? (old?.[name] ?? fallback) : input[name]);
+
+    const status = input.status ?? old?.status ?? 'done';
+    const open = meetingRules.OPEN_STATUSES.includes(status);
     const at = Date.parse(input.meeting_at);
+    const plannedRaw = keep('scheduled_at');
+    const planned = plannedRaw ? Date.parse(plannedRaw) : null;
+    const endedRaw = keep('ended_at');
+    const ended = endedRaw ? Date.parse(endedRaw) : null;
+    const movedRaw = keep('moved_from');
+    const moved = movedRaw ? Date.parse(movedRaw) : null;
+    const result = keep('result');
     const followup = input.next_followup_at ? Date.parse(input.next_followup_at) : null;
 
+    // a planned meeting has one time: the plan (meeting_at follows it, so the office and the old screens still sort by it)
+    const when = open ? (planned ?? at) : at;
+    const whenIso = Number.isNaN(when) ? null : new Date(when).toISOString();
+    const plannedIso = open ? whenIso : (planned === null || Number.isNaN(planned) ? null : new Date(planned).toISOString());
+    const changedTime = !old || old.meeting_at !== whenIso || meetingRules.isOpen(old) !== open;
+
     check(
-      Number.isNaN(at) ? 'Pick the meeting time.' : null,
+      meetingRules.STATUSES.includes(status) ? null : 'Pick a valid status.',
+      Number.isNaN(when) ? 'Pick the meeting time.' : null,
+      planned !== null && Number.isNaN(planned) ? 'Pick the planned time.' : null,
+      ended !== null && (Number.isNaN(ended) || ended < when) ? 'The end of the meeting must be after its start.' : null,
+      moved !== null && Number.isNaN(moved) ? 'The time it was moved from is not valid.' : null,
+      result === null || meetingRules.RESULTS.some((r) => r.value === result) ? null : 'Pick one of the results.',
       rules.required(input.client_name, { max: 150, label: 'Client name' }),
       rules.optional(input.purpose, { max: rules.MAX_TEXT, label: 'Purpose' }),
       rules.optional(input.discussion, { max: rules.MAX_LONG_TEXT, label: 'Discussion' }),
       rules.optional(input.outcome, { max: rules.MAX_TEXT, label: 'Outcome' }),
-      followup !== null && (Number.isNaN(followup) || followup < at) ? 'Follow-up must be after the meeting.' : null,
+      !Number.isNaN(when) && changedTime ? (open ? meetingRules.plannedWindowProblem(new Date(when)) : status === 'done' ? meetingRules.loggedWindowProblem(new Date(when)) : null) : null,
+      followup !== null && (Number.isNaN(followup) || followup < when) ? 'Follow-up must be after the meeting.' : null,
       followup !== null && followup > Date.now() + TWO_YEARS ? 'A follow-up can be at most 2 years ahead.' : null,
     );
 
-    const id = input.id ?? crypto.randomUUID();
-    const old = this.#meetings.get(id);
+    // the route: joining needs the same day and room; an old member whose day changed leaves quietly
+    let routeId = keep('route_id');
+    const day = meetingRules.dayKey(new Date(plannedIso ?? whenIso));
+    if (routeId) {
+      const route = this.#routes.get(routeId);
+      const member = old?.route_id === routeId;
+
+      if (!route && !member) check('This route does not exist any more.');
+      if (route && route.date !== day) {
+        check(member ? null : 'A route holds the stops of one day only.');
+        routeId = null;
+      }
+      if (route && routeId && !member && !route.stops_order.includes(id)) {
+        check(route.stops_order.length >= meetingRules.MAX_STOPS ? `A route holds at most ${meetingRules.MAX_STOPS} stops.` : null);
+      }
+    }
+
     const record = {
       id,
       client_id: input.client_id ?? null,
       client_name: input.client_name.trim(),
       // the people met: only ids (the people themselves are in the pool), at most 20, no repeats
       contact_ids: [...new Set((input.contact_ids ?? []).filter((c) => typeof c === 'string'))].slice(0, MAX_PEOPLE_PER_MEETING),
-      meeting_at: new Date(at).toISOString(),
+      meeting_at: whenIso,
       purpose: String(input.purpose ?? '').trim(),
       discussion: String(input.discussion ?? '').trim(),
       outcome: String(input.outcome ?? '').trim(),
       next_followup_at: followup === null ? null : new Date(followup).toISOString(),
+      status,
+      scheduled_at: plannedIso,
+      ended_at: ended === null ? null : new Date(ended).toISOString(),
+      route_id: routeId ?? null,
+      result: status === 'done' ? (result ?? null) : null,
+      moved_from: moved === null ? null : new Date(moved).toISOString(),
+      time_manual: keep('time_manual', false) === true,
       synced: false,
       sync_error: null,
       created_at: old?.created_at ?? nowIso(),
@@ -951,15 +1033,122 @@ export class Store {
 
     await this.#write(PREFIX.meeting + id, record);
     this.#meetings.set(id, record);
+
+    if (old?.route_id && old.route_id !== record.route_id) await this.#leaveRoute(old.route_id, id);
+    if (record.route_id) await this.#joinRoute(record.route_id, id);
+
     this.#changed();
     return record;
   }
 
   async deleteMeeting(id) {
+    const old = this.#meetings.get(id);
     await this.#persist.del(PREFIX.meeting + id);
     this.#meetings.delete(id);
     await this.#remember('meeting', id);
+    if (old?.route_id) await this.#leaveRoute(old.route_id, id);
     this.#changed();
+  }
+
+  /**
+   * input: { id?, title, area, start_time ("HH:MM"), overnight, stops_order: [meeting ids], times?: { meetingId: ISO } }
+   * One to ten stops, all on the same day. The stops get the route's id; stops taken out of the order leave the route.
+   * `times` moves the stops that have not happened yet (the spacing of a reordered route) in the same save.
+   */
+  async saveRoute(input) {
+    const id = input.id ?? crypto.randomUUID();
+    const old = this.#routes.get(id);
+    const order = [...new Set((input.stops_order ?? []).filter((s) => typeof s === 'string'))];
+    const stops = order.map((sid) => this.#meetings.get(sid));
+    const timed = input.times ?? {};
+
+    check(
+      order.length < 1 ? 'A route needs at least one stop.' : order.length > meetingRules.MAX_STOPS ? `A route holds at most ${meetingRules.MAX_STOPS} stops.` : null,
+      stops.some((s) => !s) ? 'A stop of this route is not on this phone.' : null,
+    );
+
+    const newTime = (stop) => (timed[stop.id] && meetingRules.isOpen(stop) ? new Date(timed[stop.id]).toISOString() : null);
+    const dayOf = (stop) => meetingRules.dayKey(new Date(newTime(stop) ?? stop.scheduled_at ?? stop.meeting_at));
+    const days = new Set(stops.map(dayOf));
+    const area = String(input.area ?? old?.area ?? '').replace(/\s+/g, ' ').trim();
+    const title = String(input.title ?? old?.title ?? meetingRules.routeTitleFor(area)).replace(/\s+/g, ' ').trim();
+    const earliest = new Date(Math.min(...stops.map((s) => new Date(newTime(s) ?? meetingRules.timeOf(s)))));
+    const startTime = input.start_time ?? old?.start_time ?? meetingRules.timeText(earliest);
+
+    check(
+      days.size > 1 ? 'All the stops of a route must be on the same day.' : null,
+      stops.some((s) => s.route_id && s.route_id !== id && this.#routes.has(s.route_id)) ? 'A stop is already in another route.' : null,
+      rules.businessName(title, { label: 'Route name', max: 60 }),
+      rules.place(area, { label: 'Place', requiredField: false }),
+      meetingRules.validStartTime(startTime) ? null : 'Pick a start time.',
+      stops.some((s) => timed[s.id] && Number.isNaN(Date.parse(timed[s.id]))) ? 'A time of the route is not valid.' : null,
+    );
+
+    const now = nowIso();
+    const route = {
+      id,
+      rep_id: this.#profile?.employee_code ?? null,
+      date: [...days][0],
+      title,
+      area,
+      start_time: startTime,
+      overnight: input.overnight === undefined ? old?.overnight === true : input.overnight === true,
+      stops_order: order,
+      synced: false,
+      sync_error: null,
+      created_at: old?.created_at ?? now,
+      updated_at: now,
+    };
+
+    await this.#write(PREFIX.route + id, route);
+    this.#routes.set(id, route);
+
+    for (const stop of stops) {
+      const at = newTime(stop);
+      if (stop.route_id === id && !at) continue;
+      await this.#put('meeting', { ...stop, route_id: id, ...(at ? { meeting_at: at, scheduled_at: at } : {}), synced: false, sync_error: null, updated_at: now });
+    }
+    for (const member of [...this.#meetings.values()]) {
+      if (member.route_id === id && !order.includes(member.id)) await this.#put('meeting', { ...member, route_id: null, synced: false, sync_error: null, updated_at: now });
+    }
+
+    this.#changed();
+    return route;
+  }
+
+  // Deleting a route keeps its meetings: they become single meetings.
+  async deleteRoute(id) {
+    if (!this.#routes.has(id)) return;
+    const now = nowIso();
+
+    for (const member of [...this.#meetings.values()]) {
+      if (member.route_id === id) await this.#put('meeting', { ...member, route_id: null, synced: false, sync_error: null, updated_at: now });
+    }
+    await this.#dropRoute(id);
+    this.#changed();
+  }
+
+  async #dropRoute(id) {
+    await this.#persist.del(PREFIX.route + id);
+    this.#routes.delete(id);
+    await this.#remember('route', id);
+  }
+
+  // A stop leaves a route; the last one leaving deletes the route.
+  async #leaveRoute(routeId, meetingId) {
+    const route = this.#routes.get(routeId);
+    if (!route) return;
+
+    const order = route.stops_order.filter((s) => s !== meetingId);
+    if (!order.length) await this.#dropRoute(routeId);
+    else await this.#put('route', { ...route, stops_order: order, synced: false, sync_error: null, updated_at: nowIso() });
+  }
+
+  async #joinRoute(routeId, meetingId) {
+    const route = this.#routes.get(routeId);
+    if (!route || route.stops_order.includes(meetingId)) return;
+
+    await this.#put('route', { ...route, stops_order: [...route.stops_order, meetingId], synced: false, sync_error: null, updated_at: nowIso() });
   }
 
   // ---- sync (used by src/sync/engine.js) ---------------------------------------------------
@@ -975,7 +1164,7 @@ export class Store {
   }
 
   #map(kind) {
-    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, enquiry: this.#enquiries, call: this.#calls, report: this.#reports, note: this.#notes, script: this.#scripts }[kind];
+    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, route: this.#routes, enquiry: this.#enquiries, call: this.#calls, report: this.#reports, note: this.#notes, script: this.#scripts }[kind];
   }
 
   getRecord(kind, id) {
@@ -1066,6 +1255,7 @@ export class Store {
       clients: this.clients.map(strip),
       contacts: this.contacts.map(strip),
       meetings: this.meetings.map(strip),
+      routes: this.routes.map(strip),
       enquiries: this.enquiries.map(strip),
       calls: this.calls.map(strip),
       reports: this.reports.map(strip),

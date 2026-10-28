@@ -13,7 +13,10 @@ function root() {
 
 // body: an element. footer: an optional element pinned under the scrolling body (the Save button).
 // onClose runs when the page goes away.
-export function openPage({ title, body, footer, onClose }) {
+// subhead: an optional element under the title row that does not scroll (the step bar of the enquiry form).
+// onBack: when given, the round back button and the phone's back button call it instead of closing the page (a form with steps goes
+// one step back; it closes the page itself with the returned `close`).
+export function openPage({ title, body, subhead, footer, onClose, onBack }) {
   const page = h('section', { class: 'page', role: 'dialog', 'aria-label': title });
   const entry = { el: page, onClose, closing: false };
 
@@ -26,12 +29,14 @@ export function openPage({ title, body, footer, onClose }) {
     entry.onClose?.();
   };
   entry.close = close;
+  entry.back = onBack ? () => onBack(close) : close;
 
   // append() of dom.js skips empty parts (the native one would print the word "null")
   append(page, [
     h('header', { class: 'page-head' },
-      h('button', { class: 'icon-btn', 'aria-label': 'Back', onclick: close }, icon('back', 20)),
+      h('button', { class: 'icon-btn', 'aria-label': 'Back', onclick: () => entry.back() }, icon('back', 20)),
       h('h1', null, title)),
+    subhead ?? null,
     h('div', { class: 'page-body' }, body),
     footer ? h('div', { class: 'page-foot' }, footer) : null,
   ]);
@@ -178,11 +183,11 @@ export function toast(text) {
 // Is a page or dialog on top of the screen? (a swipe between tabs must not work then)
 export const hasOpen = () => stack.length > 0;
 
-// Closes the top dialog or page. Returns false when there was nothing open.
+// Closes the top dialog or page (a page with steps goes one step back instead). Returns false when there was nothing open.
 export function closeTop() {
   const top = stack[stack.length - 1];
   if (!top) return false;
-  top.close();
+  (top.back ?? top.close)();
   return true;
 }
 

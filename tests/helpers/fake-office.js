@@ -5,11 +5,14 @@
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const error = (status, code, message, errors = {}) => json(status, { code, message, errors });
 
-const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries', 'calls', 'reports', 'product_requests', 'scripts'];
+const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'calls', 'reports', 'product_requests', 'scripts'];
 const NOT_PULLED = new Set(['product_requests']); // a rep's request for a guide note only goes to the office
 const STATUSES = ['new', 'price_to_send', 'price_sent', 'callback', 'meeting_planned', 'negotiation', 'won', 'lost'];
 const SHARED = new Set(['clients', 'contacts']);
-const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'enquiries', 'scripts'];
+const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'scripts'];
+const MEETING_STATUSES = ['planned', 'done', 'missed', 'moved'];
+const MEETING_FIELDS = ['status', 'scheduled_at', 'ended_at', 'route_uuid', 'result', 'moved_from', 'time_manual'];
+const SOURCES = ['call', 'walkin', 'whatsapp', 'reference'];
 const PRESETS = ['Owner / Director', 'Purchase Manager', 'Procurement Head', 'Lab Head', 'Quality (QC) Head', 'Production Head', 'Store Manager', 'Accounts', 'Other'];
 
 export class FakeOffice {
@@ -27,6 +30,8 @@ export class FakeOffice {
     this.onPush = null;          // (body) => void, runs while a push is "on its way"
     this.failPushWith = null;    // e.g. 500
     this.limit = 1000;
+    this.ignoresPlanning = false; // true = an office that has no planned meetings and routes yet: it keeps none of those fields
+    this.ignoresSource = false;  // true = an office that does not know "came through" yet: it keeps no such field and sends none
   }
 
   addRep(code, password = 'secret-pass-1', name = `Rep ${code}`) {
@@ -149,10 +154,13 @@ export class FakeOffice {
     }
     if (kind === 'scripts' && (String(r.body ?? '').trim().length < 3 || String(r.product_name ?? '').trim().length < 2)) return 'The script is too short.';
     if (kind === 'meetings' && !String(r.client_name ?? '').trim()) return 'The client name is required.';
+    if (kind === 'meetings' && !this.ignoresPlanning && r.status !== undefined && !MEETING_STATUSES.includes(r.status)) return 'The status is not valid.';
+    if (kind === 'routes' && (!/^\d{4}-\d{2}-\d{2}$/.test(r.date ?? '') || !Array.isArray(r.stops_order) || r.stops_order.length < 1 || r.stops_order.length > 10)) return 'The route is not valid.';
     if (kind === 'meetings' && r.contact_uuids !== undefined && (!Array.isArray(r.contact_uuids) || r.contact_uuids.length > 20)) return 'The people are not valid.';
     if (kind === 'enquiries') {
       if (String(r.client_name ?? '').trim().length < 2) return 'The client name is too short.';
       if (!STATUSES.includes(r.status)) return 'The status is not valid.';
+      if (!this.ignoresSource && r.source != null && !SOURCES.includes(r.source)) return 'The way it came through is not valid.';
       if (!Array.isArray(r.items) || r.items.length < 1 || r.items.length > 10) return 'An enquiry needs 1 to 10 products.';
       if (r.items.some((i) => String(i?.product ?? '').trim().length < 2 || !Number.isInteger(i?.quantity) || i.quantity < 1)) return 'A product is not valid.';
       if (!Array.isArray(r.timeline ?? []) || (r.timeline ?? []).length > 100) return 'The notes are not valid.';
@@ -184,6 +192,7 @@ export class FakeOffice {
     const results = { ...Object.fromEntries(KINDS.map((k) => [k, []])), positions: [], deleted: Object.fromEntries(DELETABLE.map((k) => [k, []])) };
 
     for (const kind of KINDS) {
+      if (kind === 'routes' && this.ignoresPlanning) continue; // an office without routes does not know the key: no answer for it
       for (const [index, r] of (body[kind] ?? []).entries()) {
         const bad = this.validate(kind, r);
         if (bad) { results[kind].push({ uuid: r?.uuid ?? null, index, status: 'rejected', code: 'INVALID', message: bad }); continue; }
@@ -208,6 +217,8 @@ export class FakeOffice {
 
         const old = row?.data ?? {};
         const data = { ...r, has_bill: r.has_bill === true && this.bills.has(r.uuid) };
+        if (kind === 'enquiries' && this.ignoresSource) delete data.source;
+        if (kind === 'meetings' && this.ignoresPlanning) for (const f of MEETING_FIELDS) delete data[f];
         if (kind === 'expenses') Object.assign(data, { status: old.status ?? 'pending', reviewed_at: old.reviewed_at ?? null, reject_reason: old.reject_reason ?? null });
         this.rows[kind].set(r.uuid, { owner: row?.owner ?? userId, assignedTo: row?.assignedTo ?? userId, data, rev: ++this.rev, deleted: false });
         results[kind].push({ uuid: r.uuid, index, status: 'accepted' });
@@ -258,7 +269,7 @@ export class FakeOffice {
     const from = since ? Number(since) : 0;
     let capped = null;
 
-    for (const kind of KINDS.filter((k) => !NOT_PULLED.has(k))) {
+    for (const kind of KINDS.filter((k) => !NOT_PULLED.has(k) && !(k === 'routes' && this.ignoresPlanning))) {
       const rows = [...this.rows[kind].values()].filter((r) => (SHARED.has(kind) || r.owner === userId) && r.rev >= from).sort((a, b) => a.rev - b.rev);
       const page = rows.slice(0, this.limit);
       if (rows.length > this.limit) { capped = Math.min(capped ?? Infinity, page.at(-1).rev); out.has_more = true; }

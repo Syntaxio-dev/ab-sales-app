@@ -39,6 +39,14 @@ export const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1
 export const toLocalInput = (date) => `${dayString(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 export const fromLocalInput = (text) => (text ? new Date(text) : null);
 
+// 10:00 am, `days` days from now (the follow-up quick buttons)
+export function tenAmIn(days = 1) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  d.setHours(10, 0, 0, 0);
+  return d;
+}
+
 // "Ravi Sharma" -> "RS", "Lab Co" -> "LC", "Acme" -> "A"
 export function initials(name) {
   const words = String(name ?? '').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);

@@ -3,9 +3,11 @@ import { openClientPage } from './clients.js';
 import { needsActionCard } from './enquiries.js';
 import { reportCard } from './report.js';
 import { h, icon, svg } from './dom.js';
-import { openClientForm, openExpenseForm, openMeetingForm } from './forms.js';
+import { openClientForm, openExpenseForm } from './forms.js';
+import { isOpen as isOpenMeeting, statusOf, timeOf } from '../core/meeting.js';
+import { meetingRow, resetMeetingView } from './meetings.js';
 import { callsCard } from './calls.js';
-import { capitalize, dayLabel, dayString, formatDay, formatDayTime, formatHeadDay, formatTime, initials, parseDay, rupees, sameDay, splitRupees } from './format.js';
+import { capitalize, dayLabel, dayString, formatHeadDay, formatTime, initials, parseDay, rupees, sameDay, splitRupees } from './format.js';
 import { officeCard } from './office.js';
 import { empty, fill, head } from './parts.js';
 import { openContactForm } from './people.js';
@@ -54,8 +56,9 @@ export function renderHome(container, app, ctx) {
   const week = lastSevenDays(expenses, now);
   const top = Math.max(1, ...week);
 
-  const meetingsToday = meetings.filter((m) => sameDay(new Date(m.meeting_at), now));
-  const nextToday = meetingsToday.map((m) => new Date(m.meeting_at)).filter((d) => d > now).sort((a, b) => a - b)[0];
+  // today's meetings: the planned and the written ones (a missed one is not a meeting held)
+  const meetingsToday = meetings.filter((m) => statusOf(m) !== 'missed' && sameDay(timeOf(m), now));
+  const nextToday = meetingsToday.filter(isOpenMeeting).map((m) => timeOf(m)).filter((d) => d > now).sort((a, b) => a - b)[0];
 
   // follow-ups that are late, or due within the next 7 days
   const horizon = now.getTime() + 7 * 86_400_000;
@@ -185,6 +188,7 @@ export function resetTabViews() {
   clientScope = 'all';
   clientPlace = '';
   expenseFilter = 'all';
+  resetMeetingView();
 }
 
 export function renderClients(container, app, ctx) {
@@ -282,30 +286,4 @@ export function renderClients(container, app, ctx) {
     any ? list : empty('users', 'No clients yet', 'Save the companies you deal with and the people who work there. Everybody on the team sees them.'),
   );
   ctx.fab('Add client', () => openClientForm(app), { label: 'Add contact person', onclick: () => openContactForm(app, { client: null }) });
-}
-
-// ---- Meetings ----------------------------------------------------------------
-
-export function meetingRow(app, m) {
-  const follow = m.next_followup_at ? new Date(m.next_followup_at) : null;
-  const late = follow && follow.getTime() < Date.now();
-
-  return h('button', { class: 'item', onclick: () => openMeetingForm(app, m) },
-    h('span', { class: 'avatar' }, initials(m.client_name)),
-    h('span', { class: 'grow' },
-      h('span', { class: 'title' }, m.client_name),
-      h('span', { class: 'sub' }, `${formatDayTime(new Date(m.meeting_at))}${m.purpose ? ` · ${m.purpose}` : ''}`)),
-    follow ? h('span', { class: 'end' }, h('span', { class: `chip${late ? ' late' : ''}` }, icon('alarm', 12), formatDay(follow))) : null);
-}
-
-export function renderMeetings(container, app, ctx) {
-  const meetings = app.store.meetings;
-
-  fill(container,
-    head({ eyebrow: `${meetings.length} written`, title: 'Meetings' }),
-    meetings.length
-      ? h('div', { class: 'list' }, meetings.map((m) => meetingRow(app, m)))
-      : empty('calendar', 'No meetings yet', 'Write down what you discussed, and set a follow-up date so you do not forget.'),
-  );
-  ctx.fab('Add meeting', () => openMeetingForm(app));
 }

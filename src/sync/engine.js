@@ -22,6 +22,7 @@ export const KINDS = [
   { kind: 'client', wire: 'clients' },
   { kind: 'contact', wire: 'contacts' },
   { kind: 'meeting', wire: 'meetings' },
+  { kind: 'route', wire: 'routes', optional: true }, // only sent when there is something: an office that has no routes yet never sees the key
   { kind: 'enquiry', wire: 'enquiries' },
   { kind: 'call', wire: 'calls', log: true },
   { kind: 'report', wire: 'reports', log: true },
@@ -39,10 +40,18 @@ const wireOf = {
   meeting: (r) => ({
     uuid: r.id, client_uuid: r.client_id, client_name: r.client_name, contact_uuids: r.contact_ids, meeting_at: r.meeting_at, purpose: r.purpose,
     discussion: r.discussion, outcome: r.outcome, next_followup_at: r.next_followup_at, updated_at: r.updated_at,
+    // planning fields: only for a meeting that was planned (an old-style meeting, and an office that does not know them, never see them)
+    ...(r.status !== 'done' || r.scheduled_at ? {
+      status: r.status, scheduled_at: r.scheduled_at, ended_at: r.ended_at, route_uuid: r.route_id, result: r.result, moved_from: r.moved_from, time_manual: r.time_manual,
+    } : {}),
+  }),
+  route: (r) => ({
+    uuid: r.id, date: r.date, title: r.title, area: r.area, start_time: r.start_time, overnight: r.overnight, stops_order: r.stops_order, updated_at: r.updated_at,
   }),
   enquiry: (r) => ({
     uuid: r.id, client_uuid: r.client_id, client_name: r.client_name, contact_uuid: r.contact_id, contact_name: r.contact_name, status: r.status,
     items: r.items, opened_at: r.opened_at, next_followup_at: r.next_followup_at, closed_at: r.closed_at, timeline: r.timeline, updated_at: r.updated_at,
+    source: r.source ?? null, // null is sent too: that is how a cleared "came through" reaches the office (an office that does not know the field ignores it)
   }),
   report: (r) => ({
     uuid: r.id, report_date: r.report_date, notes: r.notes, tomorrow_plan: r.tomorrow_plan, issues: r.issues, figures: r.figures,
@@ -252,12 +261,12 @@ export class SyncEngine {
       const body = { app_version: this.appVersion, device_model: this.deviceModel, deleted: {} };
       let any = false;
 
-      for (const { kind, wire, log } of KINDS) {
+      for (const { kind, wire, log, optional } of KINDS) {
         sent[kind] = this.#store.dirty(kind).slice(0, limit);
-        body[wire] = sent[kind].map(wireOf[kind]);
         const gone = log ? [] : this.#store.tombstones.filter((t) => t.kind === kind).slice(0, limit);
         sent[`${kind}:deleted`] = gone;
-        if (!log) body.deleted[wire] = gone.map((t) => t.id);
+        if (!optional || sent[kind].length) body[wire] = sent[kind].map(wireOf[kind]);
+        if (!log && (!optional || gone.length)) body.deleted[wire] = gone.map((t) => t.id);
         any ||= sent[kind].length > 0 || gone.length > 0;
       }
 
@@ -427,6 +436,8 @@ export class SyncEngine {
     if (action === 'keep') return false;
 
     if (kind === 'expense') cleaned = keepPendingBill(local, cleaned);
+    // an office that does not know "came through" yet sends no such key: it must not wipe what the rep chose (null sent on purpose does)
+    if (kind === 'enquiry' && !('source' in incoming) && local?.source) cleaned = { ...cleaned, source: local.source };
     await this.#store.putFromServer(kind, cleaned);
     return true;
   }

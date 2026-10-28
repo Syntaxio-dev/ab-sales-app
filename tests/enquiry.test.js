@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 
-import { byUrgency, itemsSummary, needsAction, urgency } from '../src/core/enquiry.js';
+import {
+  SOURCES, addBudget, askedBrands, askedProducts, byUrgency, daysAgo, groupRupees, guideBrands, isSource, itemsSummary, lastVisit, needsAction, openEnquiriesOf,
+  recentClients, searchClients, shortMoney, sourceLabel, splitBrands, urgency,
+} from '../src/core/enquiry.js';
 import { reportId } from '../src/core/ids.js';
 import { enquiriesWorked, figuresFor } from '../src/core/report.js';
 import { MemoryPersist } from '../src/data/persist.js';
@@ -269,4 +272,190 @@ test('what the office sends for a report is checked', () => {
   assert.equal(cleanReport(good).figures.meetings, 0, 'a bad number becomes 0');
   assert.equal(cleanReport({ ...good, report_date: 'x' }), null);
   assert.equal(cleanReport({ ...good, uuid: 'x' }), null);
+});
+
+// ---- "came through" (source) ---------------------------------------------------------------------------
+
+test('source: only the four ways, or nothing', async () => {
+  const { store } = await phone();
+
+  for (const value of ['call', 'walkin', 'whatsapp', 'reference', null]) {
+    const e = await store.saveEnquiry(input({ client_name: `Client ${value}`, source: value }));
+    assert.equal(e.source, value);
+  }
+  assert.deepEqual(SOURCES.map((x) => x.value), ['call', 'walkin', 'whatsapp', 'reference']);
+  assert.equal(sourceLabel('walkin'), 'Walk-in');
+  assert.equal(isSource('fax'), false);
+
+  const before = store.enquiries.length;
+  for (const bad of ['fax', '', 'CALL', 5, {}, false]) await assert.rejects(store.saveEnquiry(input({ source: bad })), ValidationError, String(bad));
+  assert.equal(store.enquiries.length, before, 'nothing wrong was saved');
+});
+
+test('source: a save that says nothing keeps it, null clears it, and a new enquiry starts empty', async () => {
+  const { store } = await phone();
+  const fresh = await store.saveEnquiry(input());
+  assert.equal(fresh.source, null, 'an enquiry without the field has none');
+
+  const e = await store.saveEnquiry({ ...input(), id: fresh.id, source: 'whatsapp' });
+  assert.equal((await store.saveEnquiry({ ...input(), id: e.id, note: 'Called him' })).source, 'whatsapp', 'left out = kept');
+  assert.equal((await store.saveEnquiry({ ...input(), id: e.id, source: null })).source, null, 'null = cleared');
+});
+
+test('source: sent with the enquiry (null when there is none), comes back on a new phone, and an old office does not break anything', async () => {
+  const a = await phone();
+  const plain = await a.store.saveEnquiry(input({ client_name: 'Plain Co' }));
+  const via = await a.store.saveEnquiry(input({ client_name: 'Via Co', source: 'call' }));
+  await a.engine.syncNow();
+
+  const sent = office.calls.filter((c) => c.path === '/sync/push').flatMap((c) => c.body.enquiries ?? []);
+  assert.equal(sent.find((e) => e.uuid === plain.id).source, null, 'null is sent: that is how clearing a choice reaches the office');
+  assert.equal(sent.find((e) => e.uuid === via.id).source, 'call');
+  assert.equal(office.rows.enquiries.get(via.id).data.source, 'call');
+  assert.equal(a.store.unsyncedCount, 0);
+
+  const again = await phone({ code: 'REP001' });
+  await again.engine.syncNow();
+  assert.equal(again.store.enquiryById(via.id).source, 'call');
+  assert.equal(again.store.enquiryById(plain.id).source, null);
+
+  // an office that does not know the field: it keeps none and sends none; the phone must not lose what the rep chose
+  office.ignoresSource = true;
+  await new Promise((r) => setTimeout(r, 5));
+  await again.store.saveEnquiry({ ...input({ client_name: 'Via Co' }), id: via.id, source: 'reference', note: 'Updated' });
+  await again.engine.syncNow();
+  assert.equal(again.store.unsyncedCount, 0, 'the old office accepted it');
+  assert.equal('source' in office.rows.enquiries.get(via.id).data, false);
+  assert.equal(again.store.enquiryById(via.id).source, 'reference', 'and the pull of the old office does not wipe it');
+});
+
+test('source: what the office sends is checked; a missing field is none', () => {
+  const good = { uuid: crypto.randomUUID(), client_name: 'JK', status: 'new', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(0), updated_at: iso(0), timeline: [] };
+
+  assert.equal(cleanEnquiry(good).source, null);
+  assert.equal(cleanEnquiry({ ...good, source: 'whatsapp' }).source, 'whatsapp');
+  assert.equal(cleanEnquiry({ ...good, source: 'carrier pigeon' }).source, null);
+  assert.equal(cleanEnquiry({ ...good, source: 7 }).source, null);
+  assert.equal(cleanEnquiry({ ...good, source: '<b>x</b>' }).source, null);
+});
+
+test('source: an enquiry stored before the field existed loads with none', async () => {
+  const { store } = await phone();
+  const old = cleanEnquiry({ uuid: crypto.randomUUID(), client_name: 'Old Co', status: 'new', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(-86_400_000), updated_at: iso(-86_400_000), timeline: [] });
+  delete old.source;
+
+  await store.putFromServer('enquiry', old);
+  assert.equal(store.enquiryById(old.id).source, null);
+});
+
+// ---- helpers of the three-step form ---------------------------------------------------------------------
+
+const when = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
+const client = (n, name, city = '') => ({ id: `c${n}`, name, city });
+const enq = (client_id, days, items, status = 'new', id = crypto.randomUUID()) => ({ id, client_id, status, items, opened_at: when(days), updated_at: when(days) });
+const item = (product, brands = '') => ({ product, brands, quantity: 1 });
+
+test('recent clients: newest first, once each, only ones that still exist, at most five', () => {
+  const clients = [1, 2, 3, 4, 5, 6, 7].map((n) => client(n, `Client ${n}`));
+  const enquiries = [enq('c1', 9, [item('A')]), enq('c2', 1, [item('A')]), enq('c2', 5, [item('A')]), enq('gone', 0, [item('A')]), enq(null, 0, [item('A')])];
+  const meetings = [{ client_id: 'c3', meeting_at: when(2) }, { client_id: 'c4', meeting_at: when(3) }, { client_id: 'c5', meeting_at: when(4) }, { client_id: 'c6', meeting_at: when(6) }, { client_id: 'c7', meeting_at: when(-3) }];
+
+  const list = recentClients({ enquiries, meetings, clients });
+  assert.deepEqual(list.map((r) => r.client.id), ['c2', 'c3', 'c4', 'c5', 'c6'], 'c1 is sixth; c7 (a meeting still to come) does not count; a deleted client is skipped');
+  assert.equal(recentClients({ enquiries, meetings, clients, max: 2 }).length, 2);
+  assert.deepEqual(recentClients({}), []);
+});
+
+test('last visit and "N days ago"', () => {
+  const now = new Date();
+  const meetings = [{ client_id: 'c1', meeting_at: when(10) }, { client_id: 'c1', meeting_at: when(3) }, { client_id: 'c1', meeting_at: when(-4) }, { client_id: 'c2', meeting_at: when(1) }];
+
+  assert.equal(daysAgo(lastVisit(meetings, 'c1', now), now), '3 days ago');
+  assert.equal(lastVisit(meetings, 'c9', now), null);
+  assert.equal(daysAgo(now, now), 'today');
+  assert.equal(daysAgo(new Date(now.getTime() - 86_400_000), now), 'yesterday');
+});
+
+test('client search: name or town, starts-with first, at most eight', () => {
+  const clients = [client(1, 'Alwar Pharma', 'Alwar'), client(2, 'JK Cement', 'Jaipur'), client(3, 'Mahesh Chemicals', 'Kota'), client(4, 'Jaipur Dairy Lab', 'Jaipur')];
+
+  assert.deepEqual(searchClients(clients, 'jaipur').map((c) => c.name), ['Jaipur Dairy Lab', 'JK Cement'], 'a name that starts with it first');
+  assert.deepEqual(searchClients(clients, 'KOTA').map((c) => c.name), ['Mahesh Chemicals']);
+  assert.deepEqual(searchClients(clients, 'zzz'), []);
+  assert.deepEqual(searchClients(clients, '  '), []);
+  assert.equal(searchClients(Array.from({ length: 20 }, (_, n) => client(n, `Lab ${n}`)), 'lab').length, 8);
+});
+
+test('asked products: most frequent first, the same product once whatever the spelling', () => {
+  const enquiries = [
+    enq('c1', 1, [item('Hot Air Oven'), item('Muffle Furnace')]),
+    enq('c2', 2, [item('hot air oven'), item('Balance')]),
+    enq('c3', 3, [item('Hot Air Oven'), item('Autoclave'), item('Autoclave')]),
+  ];
+
+  assert.deepEqual(askedProducts(enquiries), ['Hot Air Oven', 'Autoclave', 'Muffle Furnace', 'Balance'], 'oven x3, autoclave x2, then the newest of the single ones');
+  assert.deepEqual(askedProducts([]), []);
+});
+
+test('asked brands for a product, and the guide brands of the same product', () => {
+  const enquiries = [
+    enq('c1', 1, [item('Muffle Furnace', 'Labtech, Remi')]),
+    enq('c2', 2, [item('muffle furnace', 'remi')]),
+    enq('c3', 3, [item('Hot Air Oven', 'Local')]),
+  ];
+  const guide = [{ name: 'Muffle Furnace', premium_brands: ['Nabertherm'], economy_brands: ['Labtech'], lite_brands: [] }, { name: 'Oven', premium_brands: [], economy_brands: ['X'] }];
+
+  assert.deepEqual(askedBrands(enquiries, 'Muffle Furnace'), ['Remi', 'Labtech'], 'Remi twice, Labtech once');
+  assert.deepEqual(askedBrands(enquiries, 'Nothing'), []);
+  assert.deepEqual(askedBrands(enquiries, ''), []);
+  assert.deepEqual(guideBrands(guide, 'muffle furnace'), ['Nabertherm', 'Labtech']);
+  assert.deepEqual(guideBrands(guide, 'Oven'), ['X'], 'a guide product with a tier missing still works');
+  assert.deepEqual(guideBrands(guide, 'Unknown'), []);
+  assert.deepEqual(splitBrands('Remi,  labtech, REMI ,'), ['REMI', 'labtech']);
+});
+
+test('open enquiries of a client: only open ones, newest first, not the one being edited', () => {
+  const enquiries = [
+    enq('c1', 5, [item('A')], 'new', 'old'),
+    enq('c1', 1, [item('B')], 'price_sent', 'new'),
+    enq('c1', 2, [item('C')], 'won', 'closed'),
+    enq('c2', 0, [item('D')], 'new', 'other'),
+  ];
+
+  assert.deepEqual(openEnquiriesOf(enquiries, 'c1').map((e) => e.id), ['new', 'old']);
+  assert.deepEqual(openEnquiriesOf(enquiries, 'c1', 'new').map((e) => e.id), ['old']);
+  assert.deepEqual(openEnquiriesOf(enquiries, null), []);
+  assert.deepEqual(openEnquiriesOf(enquiries, 'c3'), []);
+});
+
+test('short money: K, L and Cr', () => {
+  assert.equal(shortMoney(340000), '₹3.4L');
+  assert.equal(shortMoney(50000), '₹50K');
+  assert.equal(shortMoney(12500000), '₹1.25Cr');
+  assert.equal(shortMoney(200000), '₹2L');
+  assert.equal(shortMoney(245000), '₹2.45L');
+  assert.equal(shortMoney(999), '₹999');
+  assert.equal(shortMoney(12500), '₹12.5K');
+  assert.equal(shortMoney(99999), '₹1L', 'never "100K"');
+  assert.equal(shortMoney(0), '₹0');
+  assert.equal(shortMoney(-5), '₹0');
+  assert.equal(shortMoney('abc'), '₹0');
+});
+
+test('budget chips add to what is typed, and the box shows Indian grouping', () => {
+  assert.equal(addBudget('', 100000), '100000');
+  assert.equal(addBudget(addBudget('', 100000), 100000), '200000', '+1L twice = 2,00,000');
+  assert.equal(addBudget('3,00,000', 50000), '350000');
+  assert.equal(addBudget('1500.50', 50000), '51500.5');
+  assert.equal(addBudget('abc', 50000), '50000', 'text that is not a number counts as nothing');
+  assert.equal(addBudget('9900000', 500000), '9999999', 'never above what the budget box can hold');
+
+  assert.equal(groupRupees('300000'), '3,00,000');
+  assert.equal(groupRupees('1234'), '1,234');
+  assert.equal(groupRupees('999'), '999');
+  assert.equal(groupRupees('1234567'), '12,34,567');
+  assert.equal(groupRupees('150000.5'), '1,50,000.5');
+  assert.equal(groupRupees('3,00,000'), '3,00,000');
+  assert.equal(groupRupees(''), '');
+  assert.equal(groupRupees('1.2.3'), '1.2.3', 'not a number: left alone for the check to refuse');
 });

@@ -1,5 +1,8 @@
 import { h, icon } from './dom.js';
-import { openClientForm, openMeetingForm } from './forms.js';
+import { openClientForm } from './forms.js';
+import { openSchedule } from './meeting-schedule.js';
+import { openVisit } from './meeting-visit.js';
+import { statusOf } from '../core/meeting.js';
 import { capitalize, formatDay, formatDayTime, initials } from './format.js';
 import { openPage } from './kit.js';
 import { callButton, openContactForm } from './people.js';
@@ -71,12 +74,12 @@ export function openClientPage(app, clientId) {
 
       h('div', null,
         h('div', { class: 'section-head', style: { marginBottom: '10px' } }, h('p', { class: 'eyebrow' }, 'Meetings'),
-          h('button', { class: 'link', onclick: () => openMeetingForm(app, null, { client_id: clientId }) }, '+ New meeting')),
+          h('button', { class: 'link', onclick: () => openSchedule(app, { client_id: clientId }) }, '+ Schedule a meeting')),
         meetings.length
-          ? h('div', { class: 'list' }, meetings.map((m) => h('button', { class: 'item', onclick: () => openMeetingForm(app, m) },
+          ? h('div', { class: 'list' }, meetings.map((m) => h('button', { class: 'item', onclick: () => openVisit(app, m.id) },
             h('span', { class: 'grow' },
               h('span', { class: 'title' }, formatDay(new Date(m.meeting_at))),
-              h('span', { class: 'sub' }, m.purpose || m.outcome || 'No purpose written')))))
+              h('span', { class: 'sub' }, [statusOf(m) === 'done' ? null : statusOf(m)[0].toUpperCase() + statusOf(m).slice(1), m.purpose || m.outcome].filter(Boolean).join(' · ') || 'No purpose written')))))
           : h('div', { class: 'card pad muted' }, 'No meetings with this client yet.')),
     ];
 

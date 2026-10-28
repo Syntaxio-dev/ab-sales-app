@@ -22,7 +22,17 @@ export function parseValue(value) {
 const toDate = (p) => new Date(p.y, p.mo, p.d, p.hh, p.mm);
 const dayKey = (y, mo, d) => y * 10_000 + mo * 100 + d;
 
+// "16:30" -> { hh: 16, mm: 30 }, or null
+const parseTime = (value) => {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value ?? ''));
+  return m ? { hh: Number(m[1]), mm: Number(m[2]) } : null;
+};
+
 export function formatPicked(kind, value) {
+  if (kind === 'time') {
+    const t = parseTime(value);
+    return t ? shownTime.format(new Date(2000, 0, 1, t.hh, t.mm)) : '';
+  }
   const p = parseValue(value);
   if (!p) return '';
   const date = toDate(p);
@@ -30,6 +40,7 @@ export function formatPicked(kind, value) {
 }
 
 function composeValue(kind, p) {
+  if (kind === 'time') return `${pad(p.hh)}:${pad(p.mm)}`;
   const day = `${p.y}-${pad(p.mo + 1)}-${pad(p.d)}`;
   return kind === 'date' ? day : `${day}T${pad(p.hh)}:${pad(p.mm)}`;
 }
@@ -43,13 +54,13 @@ function limit(kind, text, end) {
 
 /**
  * Opens the picker. Resolves with the picked value, or undefined when the person cancels.
- * kind: 'date' | 'datetime'. min / max: the same text format as the value.
+ * kind: 'date' | 'datetime' | 'time' (hour and minute only, value "HH:mm"). min / max: the same text format as the value.
  */
-export function openPicker(kind, { value = '', min = '', max = '', title = kind === 'date' ? 'Pick a date' : 'Pick a date and time' } = {}) {
+export function openPicker(kind, { value = '', min = '', max = '', title = kind === 'date' ? 'Pick a date' : kind === 'time' ? 'Pick a time' : 'Pick a date and time' } = {}) {
   const now = new Date();
-  const sel = parseValue(value) ?? { y: now.getFullYear(), mo: now.getMonth(), d: now.getDate(), hh: now.getHours(), mm: now.getMinutes() };
+  const sel = (kind === 'time' ? parseTime(value) && { y: now.getFullYear(), mo: now.getMonth(), d: now.getDate(), ...parseTime(value) } : parseValue(value)) ?? { y: now.getFullYear(), mo: now.getMonth(), d: now.getDate(), hh: now.getHours(), mm: now.getMinutes() };
   const view = { y: sel.y, mo: sel.mo };
-  let tab = 'date';
+  let tab = kind === 'time' ? 'time' : 'date';
 
   const lowest = limit(kind, min, false);
   const highest = limit(kind, max, true);
@@ -152,7 +163,7 @@ export function openPicker(kind, { value = '', min = '', max = '', title = kind 
     onclick() {
       const t = new Date();
       Object.assign(sel, { y: t.getFullYear(), mo: t.getMonth(), d: t.getDate() });
-      if (kind === 'datetime') Object.assign(sel, { hh: t.getHours(), mm: t.getMinutes() });
+      if (kind !== 'date') Object.assign(sel, { hh: t.getHours(), mm: t.getMinutes() });
       Object.assign(view, { y: sel.y, mo: sel.mo });
       error.textContent = '';
       draw();
@@ -183,7 +194,7 @@ export function openPicker(kind, { value = '', min = '', max = '', title = kind 
 
 // ---- the boxes ----
 
-function makePicker(kind, { value = '', min = '', max = '', placeholder = kind === 'date' ? 'Pick a date' : 'Pick a date and time', pickerTitle, 'aria-label': ariaLabel = null } = {}) {
+function makePicker(kind, { value = '', min = '', max = '', placeholder = kind === 'date' ? 'Pick a date' : kind === 'time' ? 'Pick a time' : 'Pick a date and time', pickerTitle, 'aria-label': ariaLabel = null } = {}) {
   let current = value;
   const text = h('span', { class: 'picker-text' });
   const el = h('button', { type: 'button', class: 'input picker', 'aria-haspopup': 'dialog' }, text, icon(kind === 'date' ? 'calendar' : 'alarm', 18));
@@ -215,6 +226,9 @@ function makePicker(kind, { value = '', min = '', max = '', placeholder = kind =
 
 /** A date box: value "YYYY-MM-DD". */
 export const dateInput = (props = {}) => makePicker('date', props);
+
+/** A time box (hour, minute, am / pm): value "HH:mm". */
+export const timeInput = (props = {}) => makePicker('time', props);
 
 /** A date and time box: value "YYYY-MM-DDTHH:mm" (local time). */
 export const dateTimeInput = (props = {}) => makePicker('datetime', props);

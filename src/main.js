@@ -28,7 +28,8 @@ import { resetCallsView } from './ui/calls.js';
 import { renderGuide, resetGuideView } from './ui/guide.js';
 import { installSelectSheets } from './ui/sheets.js';
 import { renderEnquiries, resetEnquiryView } from './ui/enquiries.js';
-import { renderClients, renderExpenses, renderHome, renderMeetings, resetTabViews } from './ui/tabs.js';
+import { renderMeetings } from './ui/meetings.js';
+import { renderClients, renderExpenses, renderHome, resetTabViews } from './ui/tabs.js';
 
 // Before anything is drawn: the saved light / dark choice (public/theme-init.js already did it before the first paint).
 applyTheme();
