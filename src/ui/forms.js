@@ -5,7 +5,6 @@ import { capitalize, dayString, formatDay, rupees } from './format.js';
 import { businessInput, cityPicks, phoneField, placeInput } from './inputs.js';
 import { chipGroup, confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
 import { dateInput } from './pickers.js';
-import { locationField } from './location.js';
 import { openContactForm } from './people.js';
 
 
@@ -208,7 +207,6 @@ export function openClientForm(app, existing = null) {
   const phone = phoneField('Main number (optional)', { value: existing?.phone ?? '', landline: true, hint: 'For example the office board number.' });
   const city = field('Place (optional)', placeInput({ placeholder: 'Town or city', value: existing?.city ?? '' }), 'The team can filter clients by place.');
   city.input.after(cityPicks(city.input));
-  const where = locationField(app, { existing });
   company.el.hidden = !existing?.company;
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 4, value: existing?.notes ?? '' }));
 
@@ -221,7 +219,6 @@ export function openClientForm(app, existing = null) {
       [company, rules.businessName(company.input.value, { label: 'Company', requiredField: false })],
       [phone, phone.problem() ?? (taken ? `This number is already saved under ${taken}.` : null)],
       [city, rules.place(city.input.value, { label: 'Place' })],
-      [where, where.problem()],
       [notes, rules.optional(notes.input.value, { max: rules.MAX_NOTE, label: 'Notes' })],
     ]);
     if (!ok) return;
@@ -235,7 +232,6 @@ export function openClientForm(app, existing = null) {
         phone: phone.value,
         city: city.input.value,
         notes: notes.input.value,
-        ...where.fields,
       });
     });
     if (!done) return;
@@ -247,7 +243,7 @@ export function openClientForm(app, existing = null) {
   const page = openPage({
     title: existing ? 'Edit client' : 'New client',
     body: h('div', { class: 'stack' },
-      name.el, company.el, phone.el, city.el, where.el, notes.el,
+      name.el, company.el, phone.el, city.el, notes.el,
       existing && store.canDelete(existing) ? deleteButton('Delete client', async () => {
         if (await confirmDialog({ title: `Delete ${existing.name}?`, text: 'The client and the people saved under it leave the pool for the whole team. Old meetings keep the name. This cannot be undone.' })) {
           await store.deleteClient(existing.id);

@@ -4,7 +4,6 @@ import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
 import { initials } from './format.js';
-import { locationField } from './location.js';
 import { businessInput, cityPicks, emailInput, personInput, phoneField, placeInput, positionInput } from './inputs.js';
 import { confirmDialog, dialog, field, openPage, toast, validate } from './kit.js';
 
@@ -208,7 +207,6 @@ export function openAddNumber(app, number) {
   const clientName = field('New client name', businessInput());
   const place = field('Place (optional)', placeInput());
   place.input.after(cityPicks(place.input));
-  const where = locationField(app);
   const person = field('Person\'s name', personInput({ maxLength: 100 }));
   const position = positionField(app, '');
 
@@ -216,7 +214,6 @@ export function openAddNumber(app, number) {
     const isNew = which.input.value === NEW;
     clientName.el.hidden = !isNew;
     place.el.hidden = !isNew;
-    where.el.hidden = !isNew;
   };
   which.input.addEventListener('change', showNew);
   showNew();
@@ -230,13 +227,12 @@ export function openAddNumber(app, number) {
       [which, which.input.value === '' ? 'Choose a client, or add a new one.' : null],
       [clientName, isNew ? rules.businessName(clientName.input.value, { label: 'Client name' }) : null],
       [place, isNew ? rules.place(place.input.value) : null],
-      [where, isNew ? where.problem() : null],
       [person, taken ? `This number is already saved under ${taken}.` : rules.personName(person.input.value)],
     ]);
     if (!ok) return;
 
     const done = await submitting(save, async () => {
-      const client = isNew ? await store.saveClient({ name: clientName.input.value, city: place.input.value, ...where.fields }) : store.clientById(which.input.value);
+      const client = isNew ? await store.saveClient({ name: clientName.input.value, city: place.input.value }) : store.clientById(which.input.value);
       await store.saveContact({ client_id: client.id, name: person.input.value, position: position.value, phone: number });
     });
 
@@ -251,7 +247,7 @@ export function openAddNumber(app, number) {
     title: 'Save this number',
     body: h('div', { class: 'stack' },
       h('div', { class: 'card pad' }, h('p', { class: 'eyebrow' }, 'Number'), h('strong', null, number)),
-      which.el, clientName.el, place.el, where.el, person.el, position.el,
+      which.el, clientName.el, place.el, person.el, position.el,
       h('p', { class: 'muted small' }, 'Everybody on the team will see this person and number. Calls with it are matched from now on.')),
     footer: save,
   });

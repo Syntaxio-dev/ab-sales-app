@@ -37,7 +37,6 @@ const wireOf = {
   }),
   client: (r) => ({
     uuid: r.id, name: r.name, company: r.company, phone: r.phone, city: r.city, notes: r.notes, updated_at: r.updated_at,
-    lat: r.lat, lng: r.lng, location_accuracy_m: r.location_accuracy_m, location_at: r.location_at,
   }),
   contact: (r) => ({ uuid: r.id, client_uuid: r.client_id, name: r.name, position: r.position, phone: r.phone, email: r.email, notes: r.notes, updated_at: r.updated_at }),
   meeting: (r) => ({
@@ -490,8 +489,6 @@ export class SyncEngine {
 
     if (kind === 'expense') cleaned = keepPendingBill(local, cleaned);
     if (kind === 'meeting') cleaned = keepPendingCheckin(local, cleaned);
-    // an office that does not know locations sends none: it must not wipe the spot the phone holds
-    if (kind === 'client' && cleaned.lat === null && local?.lat !== null && local?.lat !== undefined) cleaned = { ...cleaned, lat: local.lat, lng: local.lng, location_accuracy_m: local.location_accuracy_m, location_at: local.location_at };
     // an office that does not know "came through" yet sends no such key: it must not wipe what the rep chose (null sent on purpose does)
     if (kind === 'enquiry' && !('source' in incoming) && local?.source) cleaned = { ...cleaned, source: local.source };
     await this.#store.putFromServer(kind, cleaned);

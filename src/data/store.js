@@ -320,13 +320,8 @@ export class Store {
     const me = this.#profile;
     if (old && !this.canEdit(old)) throw new ValidationError(NOT_YOURS);
 
-    // Every client has a saved spot (the check-in of a visit is compared with it). A save that does not mention the spot keeps the old one.
-    const given = input.lat !== undefined || input.lng !== undefined;
-    const spot = given
-      ? { lat: input.lat, lng: input.lng, accuracy_m: input.location_accuracy_m ?? null }
-      : { lat: old?.lat, lng: old?.lng, accuracy_m: old?.location_accuracy_m ?? null };
-    check(geo.spotProblem(spot, { label: 'The client location' }));
-    const spotAt = given ? (input.location_at ?? nowIso()) : (old?.location_at ?? null);
+    // The client's spot is the OFFICE's: the manager sets it on the website and the phone only receives it. A rep cannot set or change it
+    // (they could stand in the office and "confirm" every client from there), so whatever a screen passes in is ignored.
 
     // one number, one place in the pool (the same rule as for a person)
     const phone = normalizePhone(input.phone);
@@ -339,10 +334,10 @@ export class Store {
       phone: normalizePhone(input.phone) ?? '',
       city: String(input.city ?? '').trim(),
       notes: String(input.notes ?? '').trim(),
-      lat: geo.round6(spot.lat),
-      lng: geo.round6(spot.lng),
-      location_accuracy_m: spot.accuracy_m === null ? null : Math.round(spot.accuracy_m),
-      location_at: spotAt,
+      lat: old?.lat ?? null,
+      lng: old?.lng ?? null,
+      location_accuracy_m: old?.location_accuracy_m ?? null,
+      location_at: old?.location_at ?? null,
       // who added it and who works it are the office's: kept as they were, and for a new client "me" (the office does the same)
       assigned_to_code: old ? old.assigned_to_code : (me?.employee_code ?? null),
       assigned_to_name: old ? old.assigned_to_name : (me?.name ?? null),

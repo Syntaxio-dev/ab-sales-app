@@ -1,6 +1,6 @@
-import { checkinLabel, checkinState, formatDistance } from '../core/geo.js';
+import { checkinLabel, checkinState } from '../core/geo.js';
 import { h, icon } from './dom.js';
-import { confirmDialog, slot, toast } from './kit.js';
+import { confirmDialog, toast } from './kit.js';
 
 // Where the rep is, read ONCE when a button is tapped (never in the background): the client's saved spot and the check-in selfie.
 // Android's own permission dialog cannot be themed, so the app explains first in its own dialog.
@@ -38,44 +38,6 @@ export async function takeSelfie(app) {
   } finally {
     app.suspendAutoLock = false;
   }
-}
-
-// The "Location" block of a client form. value = { lat, lng, accuracy_m, at } or null; the form calls problem() before saving.
-export function locationField(app, { existing = null } = {}) {
-  const has = existing && existing.lat !== null && existing.lat !== undefined;
-  let spot = has ? { lat: existing.lat, lng: existing.lng, accuracy_m: existing.location_accuracy_m, at: existing.location_at } : null;
-  let changed = false;
-
-  const text = h('p', { class: 'muted small' });
-  const button = h('button', { type: 'button', class: 'btn small-btn' });
-  const box = h('div', null, h('p', { class: 'eyebrow' }, 'Location of the client'), text, button, h('p', { class: 'muted small' }, 'Stand at the client\'s shop or office when you save it. Your visits are checked against this spot.'));
-  const field = slot(box, button);
-
-  const draw = () => {
-    text.textContent = spot
-      ? `Saved${spot.accuracy_m ? `, accurate to about ${formatDistance(Math.round(spot.accuracy_m))}` : ''}.`
-      : 'Not saved yet. This is required.';
-    button.replaceChildren(icon('pin', 18), spot ? 'Update to my current location' : 'Use my current location');
-  };
-
-  button.addEventListener('click', async () => {
-    const found = await readSpot(app, { why: 'This saves where the client is.' });
-    if (!found) return;
-    spot = { ...found, at: new Date().toISOString() };
-    changed = true;
-    field.setError(null);
-    draw();
-  });
-  draw();
-
-  return {
-    ...field,
-    // what to give store.saveClient: nothing when the spot was not touched (the old one stays)
-    get fields() {
-      return changed && spot ? { lat: spot.lat, lng: spot.lng, location_accuracy_m: spot.accuracy_m, location_at: spot.at } : {};
-    },
-    problem: () => (spot ? null : 'Save the client\'s location: tap "Use my current location" while you are at the client.'),
-  };
 }
 
 // The chip that tells what a check-in proved.

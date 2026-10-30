@@ -133,7 +133,7 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
     if (pending) {
       const away = hasLocation(chosen) ? distanceM(chosen, pending.spot) : null;
       chip = h('span', { class: `chip ${away !== null && away > CHECKIN_RADIUS_M ? 'late' : 'approved'}` }, icon(away !== null && away > CHECKIN_RADIUS_M ? 'alert' : 'pin', 12),
-        away === null ? 'Selfie ready · client location missing' : away > CHECKIN_RADIUS_M ? `Away from client · ${formatDistance(away)}` : `Checked in · ${formatDistance(away)} from client`);
+        away === null ? 'Selfie ready · the office has not set the location of this client yet' : away > CHECKIN_RADIUS_M ? `Away from client · ${formatDistance(away)}` : `Checked in · ${formatDistance(away)} from client`);
     } else if (m?.checkin_at) {
       chip = checkinChip(m);
     }

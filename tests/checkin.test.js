@@ -39,6 +39,13 @@ async function phone({ code = 'REP001', persist = new MemoryPersist() } = {}) {
 }
 
 const now = () => new Date().toISOString();
+
+// A client with the spot the OFFICE set (a rep's phone cannot set it: it only receives it).
+async function clientAt(store, name, spot) {
+  const made = await store.saveClient({ name });
+  await store.putFromServer('client', { ...made, ...(spot ? { lat: spot.lat, lng: spot.lng, location_accuracy_m: null, location_at: now() } : {}) });
+  return store.clientById(made.id);
+}
 const visit = (client, extra = {}) => ({ client_id: client.id, client_name: client.name, meeting_at: now(), status: 'done', ...extra });
 
 // ---- the pure helpers ------------------------------------------------------------------------------
@@ -69,54 +76,38 @@ test('check-in states: none, verified, away, and a client without a spot', () =>
   assert.match(checkinLabel({ checkin_at: now(), checkin_distance_m: 2200 }), /Away from client/);
 });
 
-// ---- the client's spot (required) ----------------------------------------------------------------------
+// ---- the client's spot (the office's) ----------------------------------------------------------------------
 
-test('a client cannot be saved without a location, or with a made-up one', async () => {
+test('a rep cannot set or change the spot of a client: whatever is passed in is ignored', async () => {
   const { store } = await phone();
 
-  await assert.rejects(store.saveClient({ name: 'JK Cement' }), /location/i);
-  await assert.rejects(store.saveClient({ name: 'JK Cement', lat: 120, lng: 75 }), ValidationError);
-  await assert.rejects(store.saveClient({ name: 'JK Cement', lat: 0, lng: 0 }), ValidationError);
-  assert.equal(store.clients.length, 0);
+  const made = await store.saveClient({ name: 'JK Cement', ...JAIPUR, location_accuracy_m: 12 });
+  assert.equal(made.lat, null, 'a new client has no spot until the office sets one');
 
-  const saved = await store.saveClient({ name: 'JK Cement', ...JAIPUR, location_accuracy_m: 12.4 });
-  assert.equal(saved.lat, JAIPUR.lat);
-  assert.equal(saved.location_accuracy_m, 12);
-  assert.ok(saved.location_at);
+  const set = await clientAt(store, 'Office Co', JAIPUR);
+  assert.equal(set.lat, JAIPUR.lat);
+  const edited = await store.saveClient({ id: set.id, name: 'Office Co Ltd', ...FAR });
+  assert.equal(edited.lat, JAIPUR.lat, 'the rep\'s edit keeps the office\'s spot');
+  assert.equal(edited.lng, JAIPUR.lng);
 });
 
-test('an edit that says nothing about the spot keeps it; a new spot replaces it', async () => {
+test('a client without a spot can be saved and edited; what the office sends is kept', async () => {
   const { store } = await phone();
-  const c = await store.saveClient({ name: 'JK Cement', ...JAIPUR });
-
-  const renamed = await store.saveClient({ id: c.id, name: 'JK Cement Ltd' });
-  assert.equal(renamed.lat, JAIPUR.lat);
-  assert.equal(renamed.location_at, c.location_at);
-
-  const moved = await store.saveClient({ id: c.id, name: 'JK Cement Ltd', ...FAR });
-  assert.equal(moved.lat, FAR.lat);
-});
-
-test('a client stored before locations existed still loads, and editing it asks for the spot', async () => {
-  const persist = new MemoryPersist();
-  const { store } = await phone({ persist });
-  const c = await store.saveClient({ name: 'Old Co', ...JAIPUR });
-  assert.equal(c.created_by_code, 'REP001');
-
-  // an old record: the fields are simply missing
   const legacy = cleanClient({ uuid: UUID, name: 'Legacy Co', updated_at: now() });
   assert.equal(legacy.lat, null);
   await store.putFromServer('client', { ...legacy, created_by_code: 'REP001' });
-  assert.equal(store.clientById(UUID).lat, null);
-  await assert.rejects(store.saveClient({ id: UUID, name: 'Legacy Co' }), /location/i);
-  assert.ok(await store.saveClient({ id: UUID, name: 'Legacy Co', ...JAIPUR }));
+
+  assert.ok(await store.saveClient({ id: UUID, name: 'Legacy Co Ltd' }));
+  const fromOffice = cleanClient({ uuid: UUID, name: 'Legacy Co Ltd', updated_at: now(), lat: 26.9, lng: 75.8 });
+  await store.putFromServer('client', { ...fromOffice, created_by_code: 'REP001' });
+  assert.equal(store.clientById(UUID).lat, 26.9);
 });
 
 // ---- the check-in ------------------------------------------------------------------------------------------
 
 test('a visit cannot be "done" without a check-in, but missed and moved need none', async () => {
   const { store } = await phone();
-  const client = await store.saveClient({ name: 'JK Cement', ...JAIPUR });
+  const client = await clientAt(store, 'JK Cement', JAIPUR);
 
   await assert.rejects(store.saveMeeting(visit(client)), /Check in/);
   await assert.rejects(store.saveMeeting(visit(client, { ...SPOT })), /selfie/); // the spot without the picture
@@ -135,7 +126,7 @@ test('a visit cannot be "done" without a check-in, but missed and moved need non
 
 test('a check-in far from the client still saves, flagged as away; an unknown client spot gives none', async () => {
   const { store } = await phone();
-  const client = await store.saveClient({ name: 'JK Cement', ...JAIPUR });
+  const client = await clientAt(store, 'JK Cement', JAIPUR);
 
   const away = await store.saveMeeting(visit(client, { checkin: { ...FAR, accuracy_m: 20 } }), SELFIE);
   assert.equal(checkinState(away), 'away');
@@ -147,7 +138,7 @@ test('a check-in far from the client still saves, flagged as away; an unknown cl
 
 test('the check-in is checked: a bad spot, a future time, a file that is not a picture', async () => {
   const { store } = await phone();
-  const client = await store.saveClient({ name: 'JK Cement', ...JAIPUR });
+  const client = await clientAt(store, 'JK Cement', JAIPUR);
 
   await assert.rejects(store.saveMeeting(visit(client, { checkin: { lat: 200, lng: 5 } }), SELFIE), ValidationError);
   await assert.rejects(store.saveMeeting(visit(client, { checkin: { ...JAIPUR, at: new Date(Date.now() + 3_600_000).toISOString() } }), SELFIE), /time/);
@@ -157,7 +148,7 @@ test('the check-in is checked: a bad spot, a future time, a file that is not a p
 
 test('a later edit keeps the check-in and a done visit can be corrected without a new selfie', async () => {
   const { store } = await phone();
-  const client = await store.saveClient({ name: 'JK Cement', ...JAIPUR });
+  const client = await clientAt(store, 'JK Cement', JAIPUR);
   const done = await store.saveMeeting(visit(client, { ...SPOT }), SELFIE);
 
   const edited = await store.saveMeeting({ ...store.meetingById(done.id), id: done.id, discussion: 'Wants a quote' });
@@ -167,7 +158,7 @@ test('a later edit keeps the check-in and a done visit can be corrected without 
 
 test('a planned visit becomes done only with a check-in', async () => {
   const { store } = await phone();
-  const client = await store.saveClient({ name: 'JK Cement', ...JAIPUR });
+  const client = await clientAt(store, 'JK Cement', JAIPUR);
   const at = new Date(Date.now() + 3_600_000).toISOString();
   const planned = await store.saveMeeting({ client_id: client.id, client_name: client.name, meeting_at: at, scheduled_at: at, status: 'planned' });
 
@@ -178,7 +169,7 @@ test('a planned visit becomes done only with a check-in', async () => {
 test('deleting the meeting deletes the selfie, and wiping the phone does too', async () => {
   const persist = new MemoryPersist();
   const { store } = await phone({ persist });
-  const client = await store.saveClient({ name: 'JK Cement', ...JAIPUR });
+  const client = await clientAt(store, 'JK Cement', JAIPUR);
   const done = await store.saveMeeting(visit(client, { ...SPOT }), SELFIE);
   assert.equal(await store.hasSelfieData(done.id), true);
 
@@ -203,37 +194,44 @@ test('what the office sends for a spot is checked; a missing one is none', () =>
 
 // ---- sync ---------------------------------------------------------------------------------------------------------
 
-test('the spot, the check-in and the selfie reach the office, and a new phone gets them all back', async () => {
+test('the check-in and the selfie reach the office, the office measures it, and a new phone gets it all back', async () => {
   const a = await phone();
-  const client = await a.store.saveClient({ name: 'JK Cement', ...JAIPUR, location_accuracy_m: 10 });
+  const made = await a.store.saveClient({ name: 'JK Cement' });
+  await a.engine.syncNow();
+  assert.equal(office.rows.clients.get(made.id).data.lat, undefined, 'the phone never sends a client spot');
+
+  // the manager sets the spot in the office
+  const row = office.rows.clients.get(made.id);
+  Object.assign(row.data, { lat: JAIPUR.lat, lng: JAIPUR.lng, updated_at: new Date(Date.now() + 5000).toISOString() });
+  row.rev = ++office.rev;
+  await a.engine.syncNow();
+  const client = a.store.clientById(made.id);
+  assert.equal(client.lat, JAIPUR.lat, 'the phone receives it');
+
   const done = await a.store.saveMeeting(visit(client, { checkin: { ...FAR, accuracy_m: 15 } }), SELFIE);
   await a.engine.syncNow();
 
-  const row = office.rows.meetings.get(done.id).data;
-  assert.equal(row.checkin_lat, FAR.lat);
-  assert.equal(office.rows.clients.get(client.id).data.lat, JAIPUR.lat);
+  assert.equal(office.rows.meetings.get(done.id).data.checkin_lat, FAR.lat);
   assert.ok(office.selfies.has(done.id), 'the selfie was uploaded');
   assert.equal(a.store.meetingById(done.id).selfie_synced, true);
 
   const b = await phone({ persist: new MemoryPersist() });
   await b.engine.syncNow();
   const back = b.store.meetingById(done.id);
-  assert.equal(back.checkin_lat, FAR.lat);
   assert.equal(checkinState(back), 'away'); // the office worked the distance out itself
   assert.equal(back.has_selfie, true);
   assert.ok(await b.store.hasSelfieData(done.id));
-  assert.equal(b.store.clientById(client.id).lat, JAIPUR.lat);
+  assert.equal(b.store.clientById(made.id).lat, JAIPUR.lat);
 });
 
-test('an office that does not know locations breaks nothing and the phone keeps its own', async () => {
+test('an office that does not know check-ins breaks nothing and the phone keeps its own', async () => {
   office.ignoresLocation = true;
   const a = await phone();
-  const client = await a.store.saveClient({ name: 'JK Cement', ...JAIPUR });
+  const client = await clientAt(a.store, 'JK Cement', JAIPUR);
   const done = await a.store.saveMeeting(visit(client, { ...SPOT }), SELFIE);
   await a.engine.syncNow();
 
   assert.equal(a.store.refused.length, 0);
-  assert.equal(a.store.clientById(client.id).lat, JAIPUR.lat, 'the answer without a spot does not wipe it');
-  assert.ok(a.store.meetingById(done.id).checkin_at, 'nor the check-in');
+  assert.ok(a.store.meetingById(done.id).checkin_at, 'the check-in is not wiped');
   assert.equal(a.store.meetingById(done.id).has_selfie, true);
 });
