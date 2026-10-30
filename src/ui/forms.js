@@ -133,7 +133,7 @@ export function openExpenseForm(app, existing = null) {
       removeBill = false;
       showBill(bytes);
     } catch {
-      toast('The camera or gallery could not be opened.');
+      toast('The camera could not be opened.');
     } finally {
       app.suspendAutoLock = false;
     }
@@ -141,11 +141,10 @@ export function openExpenseForm(app, existing = null) {
 
   // the photo box only shows when the rep says there is a bill
   const billZone = h('div', { class: 'bill-drop' },
-    h('div', { class: 'bill-title' }, icon('camera', 20), 'Attach bill photo (optional)'),
+    h('div', { class: 'bill-title' }, icon('camera', 20), 'Photo of the bill (optional)'),
     preview,
-    h('div', { class: 'grid2' },
-      h('button', { class: 'btn small-btn', type: 'button', onclick: () => pick('camera') }, icon('camera', 18), 'Camera'),
-      h('button', { class: 'btn small-btn', type: 'button', onclick: () => pick('gallery') }, icon('image', 18), 'Gallery')),
+    // camera only, no gallery: a bill must be photographed now, so an old or edited picture cannot be attached
+    h('button', { class: 'btn small-btn block', type: 'button', onclick: () => pick('camera') }, icon('camera', 18), 'Take photo of the bill'),
     removeBtn);
   billZone.hidden = billGroup.value !== 'with_bill';
 
