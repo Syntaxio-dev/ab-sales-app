@@ -37,7 +37,7 @@ test('a client and a person one rep adds reach the other rep, with who added it'
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
 
-  const client = await a.store.saveClient({ name: 'JK Cement', city: 'Nimbahera' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', city: 'Nimbahera' });
   await a.store.saveContact({ client_id: client.id, name: 'Rohit Sharma', position: 'Purchase Manager', phone: '98765 43210' });
   await a.engine.syncNow();
   await b.engine.syncNow();
@@ -52,7 +52,7 @@ test('a client and a person one rep adds reach the other rep, with who added it'
 test('the rep who added a client improves it; the other rep can only read it', async () => {
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
-  const client = await a.store.saveClient({ name: 'JK Cement' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   await a.engine.syncNow();
   await b.engine.syncNow();
 
@@ -60,12 +60,12 @@ test('the rep who added a client improves it; the other rep can only read it', a
   assert.equal(b.store.canEdit(b.store.clientById(client.id)), false);
 
   // the phone itself refuses (the screen shows it read only) ...
-  await assert.rejects(() => b.store.saveClient({ id: client.id, name: 'JK Cement', city: 'Hacked' }), ValidationError);
+  await assert.rejects(() => b.store.saveClient({ lat: 26.9124, lng: 75.7873, id: client.id, name: 'JK Cement', city: 'Hacked' }), ValidationError);
   assert.equal(b.store.clientById(client.id).city, '');
 
   // ... and the owner's change reaches the other rep
   await new Promise((r) => setTimeout(r, 5));
-  await a.store.saveClient({ id: client.id, name: 'JK Cement', city: 'Nimbahera', notes: 'Ask for Rohit' });
+  await a.store.saveClient({ lat: 26.9124, lng: 75.7873, id: client.id, name: 'JK Cement', city: 'Nimbahera', notes: 'Ask for Rohit' });
   await a.engine.syncNow();
   await b.engine.syncNow();
 
@@ -77,7 +77,7 @@ test('the rep who added a client improves it; the other rep can only read it', a
 test('the office refuses a change to a record somebody else added, and the phone gets the real copy back', async () => {
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
-  const client = await a.store.saveClient({ name: 'JK Cement' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   await a.engine.syncNow();
   await b.engine.syncNow();
 
@@ -125,7 +125,7 @@ test('a person can be saved without a company, and everybody sees who added them
 test('a person can be added to somebody else\'s client, and stays that rep\'s own', async () => {
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
-  const client = await a.store.saveClient({ name: 'JK Cement' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   await a.engine.syncNow();
   await b.engine.syncNow();
 
@@ -143,7 +143,7 @@ test('a person can be added to somebody else\'s client, and stays that rep\'s ow
 test('who works a client is the office\'s decision and comes down to the phone', async () => {
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
-  const client = await a.store.saveClient({ name: 'JK Cement' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   await a.engine.syncNow();
 
   office.assign(client.id, 'REP002');
@@ -153,7 +153,7 @@ test('who works a client is the office\'s decision and comes down to the phone',
   // an edit from rep 1 afterwards cannot take the client back
   await new Promise((r) => setTimeout(r, 5));
   await a.engine.syncNow();
-  await a.store.saveClient({ id: client.id, name: 'JK Cement Ltd' });
+  await a.store.saveClient({ lat: 26.9124, lng: 75.7873, id: client.id, name: 'JK Cement Ltd' });
   await a.engine.syncNow();
   await b.engine.syncNow();
   assert.equal(b.store.clientById(client.id).assigned_to_code, 'REP002');
@@ -162,7 +162,7 @@ test('who works a client is the office\'s decision and comes down to the phone',
 test('only the one who added a client can delete it; the people go with it; the others keep what is not theirs', async () => {
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
-  const client = await a.store.saveClient({ name: 'JK Cement' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   const person = await a.store.saveContact({ client_id: client.id, name: 'Rohit Sharma', phone: '98765 43210' });
   await a.engine.syncNow();
   await b.engine.syncNow();
@@ -190,12 +190,12 @@ test('only the one who added a client can delete it; the people go with it; the 
 
 test('a number can be saved once in the whole pool', async () => {
   const { store } = await phone();
-  const one = await store.saveClient({ name: 'JK Cement' });
-  const two = await store.saveClient({ name: 'Shree Cement' });
+  const one = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
+  const two = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Shree Cement' });
   const person = await store.saveContact({ client_id: one.id, name: 'Rohit', phone: '98765 43210' });
 
   await assert.rejects(store.saveContact({ client_id: two.id, name: 'Copy', phone: '+91 98765-43210' }), (e) => e instanceof ValidationError && /already saved under Rohit \(JK Cement\)/.test(e.message));
-  await assert.rejects(store.saveClient({ name: 'Third', phone: '9876543210' }).then((c) => store.saveContact({ client_id: c.id, name: 'Again', phone: '9876543210' })), ValidationError);
+  await assert.rejects(store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Third', phone: '9876543210' }).then((c) => store.saveContact({ client_id: c.id, name: 'Again', phone: '9876543210' })), ValidationError);
 
   // editing the same person keeps their own number
   await store.saveContact({ id: person.id, client_id: one.id, name: 'Rohit Sharma', phone: '98765 43210' });
@@ -222,7 +222,7 @@ test('a new position is added once, sent to the office, and everybody gets the l
 test('a person with a new position teaches the list too', async () => {
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
-  const client = await a.store.saveClient({ name: 'JK Cement' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   await a.store.saveContact({ client_id: client.id, name: 'Anita', position: 'R&D Head' });
   await a.engine.syncNow();
   await b.engine.syncNow();
@@ -231,7 +231,7 @@ test('a person with a new position teaches the list too', async () => {
 
 test('a meeting remembers the people met, and they come back on a new phone', async () => {
   const a = await phone({ code: 'REP001' });
-  const client = await a.store.saveClient({ name: 'JK Cement' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   const p1 = await a.store.saveContact({ client_id: client.id, name: 'Rohit Sharma', phone: '98765 43210' });
   const p2 = await a.store.saveContact({ client_id: client.id, name: 'Anita Gupta', phone: '91234 56789' });
   const meeting = await a.store.saveMeeting({ client_id: client.id, client_name: 'JK Cement', contact_ids: [p1.id, p2.id, p1.id], meeting_at: new Date().toISOString() });
@@ -249,7 +249,7 @@ const row = (number, type, minutesAgo, duration = 60) => ({ number, type, date: 
 
 test('only calls with a saved client number are kept; every other call is dropped', async () => {
   const { store } = await phone();
-  const client = await store.saveClient({ name: 'JK Cement' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   const rohit = await store.saveContact({ client_id: client.id, name: 'Rohit Sharma', position: 'Purchase Manager', phone: '98765 43210' });
 
   const { matched, unknown } = await matchCalls([
@@ -277,7 +277,7 @@ test('only calls with a saved client number are kept; every other call is droppe
 
 test('the same call always has the same id, so importing twice never doubles it', async () => {
   const { store } = await phone();
-  const client = await store.saveClient({ name: 'JK Cement', phone: '98765 43210' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', phone: '98765 43210' });
   const log = [row('9876543210', 2, 10, 95)];
 
   const first = await matchCalls(log, store, 'REP001');
@@ -297,7 +297,7 @@ test('the same call always has the same id, so importing twice never doubles it'
 test('calls are sent once, stay with their rep, and come back on a new phone', async () => {
   const a = await phone({ code: 'REP001' });
   const b = await phone({ code: 'REP002' });
-  const client = await a.store.saveClient({ name: 'JK Cement', phone: '98765 43210' });
+  const client = await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', phone: '98765 43210' });
   await a.store.saveCalls((await matchCalls([row('9876543210', 2, 10, 95)], a.store, 'REP001')).matched);
 
   await a.engine.syncNow();
@@ -336,7 +336,7 @@ test('switching account wipes the phone for the next rep, but only after everyth
   await app.store.saveProfile({ name: 'Rep REP001', employeeCode: 'REP001' });
   await app.sync.connect({ login: 'REP001', password: 'secret-pass-1' });
 
-  await app.store.saveClient({ name: 'JK Cement' });
+  await app.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement' });
   await assert.rejects(app.switchAccount(), (e) => e instanceof ValidationError && /not sent/.test(e.message));
   assert.equal(app.store.clients.length, 1, 'nothing was lost by the refusal');
 
@@ -361,7 +361,7 @@ test('switching anyway (the person agreed to lose unsent changes) wipes even the
   await app.unlock('483920');
   await app.store.saveProfile({ name: 'Rep REP001', employeeCode: 'REP001' });
   await app.sync.connect({ login: 'REP001', password: 'secret-pass-1' });
-  await app.store.saveClient({ name: 'Unsent' });
+  await app.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Unsent' });
 
   await app.switchAccount({ discard: true });
 
@@ -373,7 +373,7 @@ test('switching anyway (the person agreed to lose unsent changes) wipes even the
 
 test('a phone that held a sync cursor from before the pool still gets every shared client once', async () => {
   const b = await phone({ code: 'REP002' });
-  await b.store.saveClient({ name: 'Old Co' });
+  await b.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Old Co' });
   await b.engine.syncNow();
 
   const a = await phone({ code: 'REP001' });
@@ -387,7 +387,7 @@ test('a phone that held a sync cursor from before the pool still gets every shar
 
 test('a sync that is still running when the rep is switched writes nothing into the cleared phone', async () => {
   const b = await phone({ code: 'REP002' });
-  await b.store.saveClient({ name: 'Shared Co' });
+  await b.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Shared Co' });
   await b.store.saveExpense({ category: 'fuel', bill_type: 'without_bill', work_area: 'local', amount_paise: 500, expense_date: new Date().toISOString().slice(0, 10) });
   await b.engine.syncNow();
 
@@ -426,7 +426,7 @@ test('call matching is off until the person turns it on, and then only matched c
   const app = appOn(new MemoryPersist(), { callLog });
   await app.unlock('483920');
   await app.store.saveProfile({ name: 'Rep REP001', employeeCode: 'REP001' });
-  await app.store.saveClient({ name: 'JK Cement', phone: '98765 43210' });
+  await app.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', phone: '98765 43210' });
 
   assert.equal(await app.callMatchingState(), 'off');
   assert.deepEqual(await app.refreshCalls(), { added: 0 }, 'nothing is read while it is off');

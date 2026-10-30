@@ -1,5 +1,5 @@
 import { fromBase64, toBase64 } from '../security/crypto.js';
-import { CLEANERS, cleanGuide, decide, keepPendingBill } from './merge.js';
+import { CLEANERS, cleanGuide, decide, keepPendingBill, keepPendingCheckin } from './merge.js';
 import { SyncError } from './http.js';
 
 // Keeps the phone and the office in step. The rules that make it safe to run again and again, at any time, on any network:
@@ -35,12 +35,19 @@ const wireOf = {
     uuid: r.id, category: r.category, amount_paise: r.amount_paise, expense_date: r.expense_date, note: r.note, work_area: r.work_area, bill_type: r.bill_type,
     has_bill: r.has_bill, updated_at: r.updated_at,
   }),
-  client: (r) => ({ uuid: r.id, name: r.name, company: r.company, phone: r.phone, city: r.city, notes: r.notes, updated_at: r.updated_at }),
+  client: (r) => ({
+    uuid: r.id, name: r.name, company: r.company, phone: r.phone, city: r.city, notes: r.notes, updated_at: r.updated_at,
+    lat: r.lat, lng: r.lng, location_accuracy_m: r.location_accuracy_m, location_at: r.location_at,
+  }),
   contact: (r) => ({ uuid: r.id, client_uuid: r.client_id, name: r.name, position: r.position, phone: r.phone, email: r.email, notes: r.notes, updated_at: r.updated_at }),
   meeting: (r) => ({
     uuid: r.id, client_uuid: r.client_id, client_name: r.client_name, contact_uuids: r.contact_ids, meeting_at: r.meeting_at, purpose: r.purpose,
     discussion: r.discussion, outcome: r.outcome, next_followup_at: r.next_followup_at, updated_at: r.updated_at,
     // planning fields: only for a meeting that was planned (an old-style meeting, and an office that does not know them, never see them)
+    // the check-in (spot + selfie flag): only when there is one; the selfie itself is uploaded after the record
+    ...(r.checkin_at ? {
+      checkin_at: r.checkin_at, checkin_lat: r.checkin_lat, checkin_lng: r.checkin_lng, checkin_accuracy_m: r.checkin_accuracy_m, has_selfie: r.has_selfie,
+    } : {}),
     ...(r.status !== 'done' || r.scheduled_at ? {
       status: r.status, scheduled_at: r.scheduled_at, ended_at: r.ended_at, route_uuid: r.route_id, result: r.result, moved_from: r.moved_from, time_manual: r.time_manual,
     } : {}),
@@ -211,9 +218,11 @@ export class SyncEngine {
     try {
       await this.#push(summary);
       await this.#uploadBills(summary);
+      await this.#uploadSelfies(summary);
       await this.#pull(summary);
       await this.#pullGuide();
       await this.#downloadBills(summary);
+      await this.#downloadSelfies(summary);
 
       await this.#store.saveSyncState({ last_sync_at: this.clock().toISOString(), last_error: null });
     } catch (error) {
@@ -351,6 +360,50 @@ export class SyncEngine {
     }
   }
 
+  // The selfie of a check-in goes after its meeting (the office must know the meeting first), like a bill photo.
+  async #uploadSelfies(summary) {
+    const waiting = this.#store.meetings.filter((m) => m.has_selfie && !m.selfie_synced && m.synced).slice(0, BILLS_PER_RUN);
+
+    for (const meeting of waiting) {
+      const bytes = await this.#store.selfieFor(meeting.id);
+      if (!bytes) {
+        await this.#store.markSelfieSynced(meeting.id);
+        continue;
+      }
+
+      try {
+        await this.#http.post('/uploads/selfie', { meeting_uuid: meeting.id, data_base64: toBase64(bytes) }, { token: this.#token() });
+        await this.#store.markSelfieSynced(meeting.id);
+        summary.billsUp++;
+      } catch (error) {
+        if (error instanceof SyncError && ['LOCKED', 'INVALID', 'PAYLOAD_TOO_LARGE', 'VALIDATION_FAILED', 'NOT_FOUND'].includes(error.code)) {
+          await this.#store.markSelfieSynced(meeting.id); // the office will never take it (or does not know selfies yet): stop trying
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  async #downloadSelfies(summary) {
+    const missing = this.#store.meetings.filter((m) => m.has_selfie && m.selfie_synced).slice(0, 200);
+    let n = 0;
+
+    for (const meeting of missing) {
+      if (n >= BILLS_PER_RUN) break;
+      if (await this.#store.hasSelfieData(meeting.id)) continue;
+      n++;
+
+      try {
+        const answer = await this.#http.get(`/meetings/${meeting.id}/selfie`, { token: this.#token() });
+        await this.#store.saveSelfieFromServer(meeting.id, fromBase64(String(answer.data_base64 ?? '')));
+        summary.billsDown++;
+      } catch (error) {
+        if (!(error instanceof SyncError && ['NOT_FOUND', 'INVALID'].includes(error.code))) throw error;
+      }
+    }
+  }
+
   async #downloadBills(summary) {
     const missing = [];
     for (const expense of this.#store.expenses) {
@@ -436,6 +489,9 @@ export class SyncEngine {
     if (action === 'keep') return false;
 
     if (kind === 'expense') cleaned = keepPendingBill(local, cleaned);
+    if (kind === 'meeting') cleaned = keepPendingCheckin(local, cleaned);
+    // an office that does not know locations sends none: it must not wipe the spot the phone holds
+    if (kind === 'client' && cleaned.lat === null && local?.lat !== null && local?.lat !== undefined) cleaned = { ...cleaned, lat: local.lat, lng: local.lng, location_accuracy_m: local.location_accuracy_m, location_at: local.location_at };
     // an office that does not know "came through" yet sends no such key: it must not wipe what the rep chose (null sent on purpose does)
     if (kind === 'enquiry' && !('source' in incoming) && local?.source) cleaned = { ...cleaned, source: local.source };
     await this.#store.putFromServer(kind, cleaned);

@@ -1,6 +1,7 @@
 import {
   BASE_CITY, RESULTS, clashWith, defaultSlot, isOpen, loggedWindowProblem, plannedWindowProblem, resultLabel, statusOf, timeOf,
 } from '../core/meeting.js';
+import { CHECKIN_RADIUS_M, distanceM, formatDistance, hasLocation } from '../core/geo.js';
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { clientPicker } from './client-picker.js';
@@ -9,6 +10,7 @@ import { openEnquiryForm } from './enquiry-form.js';
 import { formatTime, fromLocalInput, initials, tenAmIn, toLocalInput } from './format.js';
 import { openExpenseForm } from './forms.js';
 import { confirmDialog, openPage, slot, toast, validate } from './kit.js';
+import { checkinChip, readSpot, takeSelfie } from './location.js';
 import { openSchedule } from './meeting-schedule.js';
 import { dateTimeInput } from './pickers.js';
 import { openContactForm } from './people.js';
@@ -68,6 +70,9 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
     touched: false,
     logWhen: now,
   };
+  // the check-in taken on this page (spot + selfie), not saved yet; an earlier one is on the meeting
+  let pending = null;
+  let selfieUrl = null;
   let changing = !state.clientId && !state.other;
   let page = null;
 
@@ -98,7 +103,7 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
 
   const clientBox = h('div', { class: 'stack' });
   const clientSlot = slot(clientBox, null);
-  const picker = log ? clientPicker(app, state, { onPick() { changing = false; clientSlot.setError(null); drawClient(); drawPeople(); } }) : null;
+  const picker = log ? clientPicker(app, state, { onPick() { changing = false; clientSlot.setError(null); drawClient(); drawPeople(); drawCheckin(); } }) : null;
 
   function drawClient() {
     if (!log) return;
@@ -115,6 +120,46 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
   const logWhen = log ? dateTimeInput({ min: '2020-01-01T00:00', max: toLocalInput(new Date(Date.now() + 86_400_000)), value: toLocalInput(now), pickerTitle: 'When was the visit?', 'aria-label': 'When was the visit' }) : null;
   const logSlot = log ? slot(h('div', null, h('p', { class: 'eyebrow' }, 'When did it happen?'), logWhen), logWhen) : null;
 
+  // ---- check in: a selfie at the client, with the spot ----------------------------------------------------------------------
+
+  const checkinBox = h('div', { class: 'card pad stack checkin' });
+  const checkinSlot = slot(checkinBox, null);
+
+  const hasCheckin = () => Boolean(pending || m?.checkin_at);
+
+  function drawCheckin() {
+    const chosen = client();
+    let chip = null;
+    if (pending) {
+      const away = hasLocation(chosen) ? distanceM(chosen, pending.spot) : null;
+      chip = h('span', { class: `chip ${away !== null && away > CHECKIN_RADIUS_M ? 'late' : 'approved'}` }, icon(away !== null && away > CHECKIN_RADIUS_M ? 'alert' : 'pin', 12),
+        away === null ? 'Selfie ready · client location missing' : away > CHECKIN_RADIUS_M ? `Away from client · ${formatDistance(away)}` : `Checked in · ${formatDistance(away)} from client`);
+    } else if (m?.checkin_at) {
+      chip = checkinChip(m);
+    }
+
+    checkinBox.replaceChildren(
+      h('p', { class: 'eyebrow' }, 'Proof of visit'),
+      ...(pending && selfieUrl ? [h('img', { class: 'bill', src: selfieUrl, alt: 'Your check-in selfie' })] : []),
+      chip ?? h('p', { class: 'muted small' }, state.answer === 'done' ? 'Required to save a finished visit. Take a selfie at the place of the client.' : 'Take a selfie when you reach the client. It proves you went, whatever the result.'),
+      h('button', { type: 'button', class: 'btn small-btn', async onclick() { await doCheckin(); } }, icon('camera', 18), hasCheckin() ? 'Retake selfie' : 'Take selfie and check in'));
+  }
+
+  async function doCheckin() {
+    const spot = await readSpot(app, { why: 'This shows that you are at the place of the client.' });
+    if (!spot) return;
+
+    const bytes = await takeSelfie(app);
+    if (!bytes) return;
+    if (!rules.imageKind(bytes) || bytes.length > rules.MAX_BILL_BYTES) return toast('Please use a JPG, PNG or WebP picture under 5 MB.');
+
+    if (selfieUrl) URL.revokeObjectURL(selfieUrl);
+    selfieUrl = URL.createObjectURL(new Blob([bytes]));
+    pending = { spot: { ...spot, at: new Date().toISOString() }, bytes };
+    checkinSlot.setError(null);
+    drawCheckin();
+  }
+
   // ---- how did it go ------------------------------------------------------------------------------------------------------
 
   const answerSlot = slot(h('div', null, h('p', { class: 'eyebrow' }, 'How did it go?'), h('div', { class: 'how-tiles', role: 'radiogroup', 'aria-label': 'How did it go' })), null);
@@ -129,6 +174,7 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
       onclick() {
         state.answer = state.answer === value ? null : value;
         answerSlot.setError(null);
+        drawCheckin();
         drawTiles();
         drawPanels();
       },
@@ -234,6 +280,7 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
         [clientSlot, chosen || (state.other && !rules.businessName(typed, { label: 'Client name' })) ? null : state.other ? rules.businessName(typed, { label: 'Client name' }) : 'Choose a client, or type a new client name.'],
         [logSlot, logAt && !Number.isNaN(logAt.getTime()) ? loggedWindowProblem(logAt) : 'Pick the date and time.'],
       ] : [[answerSlot, state.answer ? null : 'Pick Done, Missed or Move.']]),
+      [checkinSlot, state.answer === 'done' && !hasCheckin() && (!m || status !== 'done') ? 'Check in at the client first: take a selfie at the place.' : null],
       [noteSlot, state.answer === 'done' ? rules.optional(state.note, { max: MAX_NOTE, label: 'Note' }) : null],
       [moveSlot, state.answer === 'move' ? plannedWindowProblem(state.when) : null],
     ]);
@@ -249,6 +296,7 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
       discussion: state.answer === 'done' ? state.note : m?.discussion ?? '',
       next_followup_at: state.answer === 'done' ? (followDate()?.toISOString() ?? null) : m?.next_followup_at ?? null,
       route_id: m?.route_id ?? null,
+      ...(pending ? { checkin: pending.spot } : {}),
     };
 
     let input;
@@ -265,7 +313,7 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
 
     save.disabled = true;
     try {
-      return await store.saveMeeting(input);
+      return await store.saveMeeting(input, { selfie: pending?.bytes ?? null });
     } catch (error) {
       toast(error instanceof ValidationError ? error.message : 'Could not save. Please try again.');
       return null;
@@ -307,10 +355,11 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
 
   page = openPage({
     title: log ? 'Log a visit' : m.client_name,
-    onClose: stop,
+    onClose() { stop(); if (selfieUrl) URL.revokeObjectURL(selfieUrl); },
     body: h('div', { class: 'stack sched' },
       top,
       ...(log ? [h('div', null, h('p', { class: 'eyebrow' }, 'Client'), clientSlot.el), logSlot.el] : [answerSlot.el]),
+      checkinSlot.el,
       moveSlot.el,
       doneBox,
       remove),
@@ -319,6 +368,7 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
 
   drawTop();
   drawClient();
+  drawCheckin();
   drawTiles();
   drawResult();
   drawPeople();

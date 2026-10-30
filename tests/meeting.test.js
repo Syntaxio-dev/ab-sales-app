@@ -11,6 +11,7 @@ import { MemoryPersist } from '../src/data/persist.js';
 import { Store, ValidationError } from '../src/data/store.js';
 import { aesKey, randomBytes } from '../src/security/crypto.js';
 import { cleanMeeting } from '../src/sync/merge.js';
+import { SELFIE, SPOT } from './helpers/checkin.js';
 
 // Meetings that can be planned: the status, the dates that are allowed, and the pure helpers of the Meetings screens.
 
@@ -107,7 +108,7 @@ test('a planned meeting keeps one time: meeting_at follows the plan', async () =
 test('a meeting that happened may still be written up to a day ahead, not more', async () => {
   const store = await open();
 
-  assert.ok(await store.saveMeeting({ client_name: 'A', meeting_at: iso(day(-1)), status: 'done' }));
+  assert.ok(await store.saveMeeting({ client_name: 'A', meeting_at: iso(day(-1)), status: 'done', ...SPOT }, SELFIE));
   assert.ok(await store.saveMeeting({ client_name: 'B', meeting_at: new Date(Date.now() + 3_600_000).toISOString() }), 'an hour ahead (clocks differ)');
   await assert.rejects(store.saveMeeting({ client_name: 'C', meeting_at: iso(day(3)) }), /after tomorrow/);
   await assert.rejects(store.saveMeeting({ client_name: 'D', meeting_at: iso(day(3)), status: 'done' }), ValidationError);
@@ -130,8 +131,8 @@ test('an overdue planned meeting can be edited without picking a new time, and a
 test('the result and the status are checked; a result only belongs to a visit that was done', async () => {
   const store = await open();
 
-  for (const r of RESULTS) assert.equal((await store.saveMeeting({ client_name: 'A', meeting_at: iso(day(-1)), status: 'done', result: r.value })).result, r.value);
-  await assert.rejects(store.saveMeeting({ client_name: 'A', meeting_at: iso(day(-1)), status: 'done', result: 'maybe' }), ValidationError);
+  for (const r of RESULTS) assert.equal((await store.saveMeeting({ client_name: 'A', meeting_at: iso(day(-1)), status: 'done', result: r.value, ...SPOT }, SELFIE)).result, r.value);
+  await assert.rejects(store.saveMeeting({ client_name: 'A', meeting_at: iso(day(-1)), status: 'done', result: 'maybe', ...SPOT }, SELFIE), ValidationError);
   await assert.rejects(store.saveMeeting({ client_name: 'A', meeting_at: iso(day(-1)), status: 'archived' }), ValidationError);
 
   const missed = await store.saveMeeting({ client_name: 'A', meeting_at: iso(day(-1)), status: 'missed', result: 'order' });
@@ -142,8 +143,8 @@ test('the result and the status are checked; a result only belongs to a visit th
 
 test('only logged meetings count in the daily report, and a planned visit is not a visit that happened', async () => {
   const store = await open();
-  const client = await store.saveClient({ name: 'JK Cement', phone: '98765 43210' });
-  await store.saveMeeting({ client_id: client.id, client_name: 'JK Cement', meeting_at: new Date().toISOString(), status: 'done' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', phone: '98765 43210' });
+  await store.saveMeeting({ client_id: client.id, client_name: 'JK Cement', meeting_at: new Date().toISOString(), status: 'done', ...SPOT }, SELFIE);
   await store.saveMeeting({ client_id: client.id, client_name: 'JK Cement', ...planned(0, 23, 59), status: 'planned' });
 
   const today = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;

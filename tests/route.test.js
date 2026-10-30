@@ -9,6 +9,7 @@ import { SyncEngine } from '../src/sync/engine.js';
 import { createHttp } from '../src/sync/http.js';
 import { cleanRoute } from '../src/sync/merge.js';
 import { FakeOffice } from './helpers/fake-office.js';
+import { SELFIE, SPOT } from './helpers/checkin.js';
 
 // Routes: several meetings of one day as one trip. The rules the store keeps, and how routes travel to the office and back.
 
@@ -186,7 +187,7 @@ test('reordering recalculates the stops that have not happened yet, and leaves t
   const route = await store.saveRoute({ stops_order: [a.id, b.id, c.id, d.id], start_time: '09:00' });
 
   // Alpha is done (it keeps the time it really happened)
-  await store.saveMeeting({ ...store.meetingById(a.id), id: a.id, status: 'done', meeting_at: day(0, 9, 20).toISOString(), scheduled_at: a.scheduled_at });
+  await store.saveMeeting({ ...store.meetingById(a.id), id: a.id, status: 'done', meeting_at: day(0, 9, 20).toISOString(), scheduled_at: a.scheduled_at, ...SPOT }, SELFIE);
 
   const order = [d, b, c, a].map((x) => store.meetingById(x.id));
   const stops = order;
@@ -272,7 +273,7 @@ test('a planned meeting that was logged tells the office it is done (and keeps i
   assert.equal(office.rows.meetings.get(s.id).data.status, 'planned');
 
   await new Promise((r) => setTimeout(r, 5));
-  await a.store.saveMeeting({ ...a.store.meetingById(s.id), id: s.id, status: 'done', meeting_at: new Date().toISOString(), result: 'price_asked', discussion: 'Wants a quote' });
+  await a.store.saveMeeting({ ...a.store.meetingById(s.id), id: s.id, status: 'done', meeting_at: new Date().toISOString(), result: 'price_asked', discussion: 'Wants a quote', ...SPOT }, SELFIE);
   await a.engine.syncNow();
 
   const data = office.rows.meetings.get(s.id).data;

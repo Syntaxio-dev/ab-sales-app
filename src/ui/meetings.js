@@ -11,6 +11,7 @@ import { openVisit } from './meeting-visit.js';
 import { timeInput } from './pickers.js';
 import { empty, fill, head } from './parts.js';
 import { shortDay } from './when-chips.js';
+import { checkinChip } from './location.js';
 
 // The Meetings tab: a week strip, the chosen day as route cards and single meetings, a reminder for visits nobody wrote up, and the
 // route menu (rename, reorder, start time, delete). Everything shown is the signed-in rep's own (the phone holds nobody else's).
@@ -78,7 +79,8 @@ export function meetingRow(app, m) {
     h('span', { class: 'avatar' }, initials(m.client_name)),
     h('span', { class: 'grow' },
       h('span', { class: 'title' }, m.client_name),
-      h('span', { class: 'sub' }, `${dayName(timeOf(m))}, ${formatTime(timeOf(m))}${m.purpose ? ` · ${m.purpose}` : ''}`)),
+      h('span', { class: 'sub' }, `${dayName(timeOf(m))}, ${formatTime(timeOf(m))}${m.purpose ? ` · ${m.purpose}` : ''}`),
+      m.checkin_at ? h('span', { class: 'sub' }, checkinChip(m)) : null),
     follow ? h('span', { class: 'end' }, h('span', { class: `chip${late ? ' late' : ''}` }, icon('alarm', 12), formatDay(follow))) : statusTag(m) ? h('span', { class: 'end' }, statusTag(m)) : null);
 }
 

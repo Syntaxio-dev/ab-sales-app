@@ -1,6 +1,6 @@
 {
   "name": "ab-sales-app",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "description": "Agarwal Brothers field sales app (expenses, clients, meetings), offline Android APK",
   "type": "module",
@@ -19,6 +19,7 @@
     "@capacitor/cli": "^8.5.3",
     "@capacitor/core": "^8.5.3",
     "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/geolocation": "^8.2.4",
     "@capacitor/share": "^8.0.3",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/manrope": "^5.3.0",

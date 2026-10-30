@@ -40,7 +40,7 @@ test('records survive closing and opening again with the same key', async () => 
 
 test('what reaches the disk is not readable text', async () => {
   const store = await Store.open(persist, key);
-  await store.saveClient({ name: 'Zebra Laboratories', phone: '9876543210', city: 'Jaipur', notes: 'secret-note-xyz' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Zebra Laboratories', phone: '9876543210', city: 'Jaipur', notes: 'secret-note-xyz' });
   await store.saveExpense(expense({ note: 'private-expense-note' }));
 
   const everything = [...persist.data.values()].join('|');
@@ -150,16 +150,16 @@ test('removing a photo keeps the expense', async () => {
 test('a client phone is stored in one spelling, and a bad phone is refused', async () => {
   const store = await Store.open(persist, key);
 
-  const client = await store.saveClient({ name: 'Lab Co', phone: '98765 43210' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co', phone: '98765 43210' });
   assert.equal(client.phone, '+919876543210');
 
-  await assert.rejects(store.saveClient({ name: 'Bad', phone: '12' }), ValidationError);
-  await assert.rejects(store.saveClient({ name: 'A' }), ValidationError);
+  await assert.rejects(store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Bad', phone: '12' }), ValidationError);
+  await assert.rejects(store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'A' }), ValidationError);
 });
 
 test('a meeting keeps the client name when the client is deleted; follow-up must be after the meeting', async () => {
   const store = await Store.open(persist, key);
-  const client = await store.saveClient({ name: 'Lab Co' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
   const at = new Date().toISOString();
   const later = new Date(Date.now() + 7 * 86_400_000).toISOString();
   const earlier = new Date(Date.now() - 86_400_000).toISOString();
@@ -202,9 +202,9 @@ test('listeners hear about changes and can stop listening', async () => {
   let calls = 0;
   const stop = store.subscribe(() => calls++);
 
-  await store.saveClient({ name: 'Lab Co' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
   stop();
-  await store.saveClient({ name: 'Other Co' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Other Co' });
 
   assert.equal(calls, 1);
 });

@@ -24,6 +24,8 @@ export class FakeOffice {
     this.products = [];          // the product guide the manager wrote (raw, as the API sends it)
     this.productsVersion = 'v0000000000000001';
     this.bills = new Map();      // expense uuid -> base64
+    this.selfies = new Map();    // meeting uuid -> base64 (the check-in selfie)
+    this.ignoresLocation = false; // true = an office that does not know client locations and check-ins: it keeps none of those fields
     this.rev = 0;
     this.offline = false;
     this.calls = [];
@@ -95,10 +97,17 @@ export class FakeOffice {
     if (path === '/sync/push' && method === 'POST') return this.push(userId, body);
     if (path === '/sync/pull') return this.pull(userId, u.searchParams.get('since'));
     if (path === '/uploads/bill' && method === 'POST') return this.upload(userId, body);
+    if (path === '/uploads/selfie' && method === 'POST') return this.uploadSelfie(userId, body);
     if (path === '/products' && method === 'GET') {
       return u.searchParams.get('version') === this.productsVersion
         ? json(200, { version: this.productsVersion, unchanged: true })
         : json(200, { version: this.productsVersion, unchanged: false, products: this.products });
+    }
+
+    const selfie = /^\/meetings\/([^/]+)\/selfie$/.exec(path);
+    if (selfie) {
+      const row = this.rows.meetings.get(selfie[1]);
+      return row && row.owner === userId && this.selfies.has(selfie[1]) ? json(200, { mime: 'image/jpeg', data_base64: this.selfies.get(selfie[1]) }) : error(404, 'NOT_FOUND', 'No selfie.');
     }
 
     const bill = /^\/expenses\/([^/]+)\/bill$/.exec(path);
@@ -218,6 +227,8 @@ export class FakeOffice {
         const old = row?.data ?? {};
         const data = { ...r, has_bill: r.has_bill === true && this.bills.has(r.uuid) };
         if (kind === 'enquiries' && this.ignoresSource) delete data.source;
+        if (this.ignoresLocation && kind === 'clients') for (const f of ['lat', 'lng', 'location_accuracy_m', 'location_at']) delete data[f];
+        if (this.ignoresLocation && kind === 'meetings') for (const f of ['checkin_at', 'checkin_lat', 'checkin_lng', 'checkin_accuracy_m', 'has_selfie']) delete data[f];
         if (kind === 'meetings' && this.ignoresPlanning) for (const f of MEETING_FIELDS) delete data[f];
         if (kind === 'expenses') Object.assign(data, { status: old.status ?? 'pending', reviewed_at: old.reviewed_at ?? null, reject_reason: old.reject_reason ?? null });
         this.rows[kind].set(r.uuid, { owner: row?.owner ?? userId, assignedTo: row?.assignedTo ?? userId, data, rev: ++this.rev, deleted: false });
@@ -253,6 +264,11 @@ export class FakeOffice {
   shape(kind, row) {
     const out = { ...row.data, deleted: row.deleted };
     if (kind === 'expenses') out.has_bill = this.bills.has(row.data.uuid);
+    if (kind === 'meetings' && row.data.checkin_at) {
+      out.has_selfie = this.selfies.has(row.data.uuid);
+      const client = this.rows.clients.get(row.data.client_uuid)?.data;
+      out.checkin_distance_m = client && client.lat != null ? haversine(client, { lat: row.data.checkin_lat, lng: row.data.checkin_lng }) : null; // the office works it out itself
+    }
     if (kind === 'clients' || kind === 'contacts') {
       const added = this.userById(row.owner);
       Object.assign(out, { created_by_code: added?.code ?? null, created_by_name: added?.name ?? null });
@@ -282,6 +298,16 @@ export class FakeOffice {
     return json(200, out);
   }
 
+  uploadSelfie(userId, { meeting_uuid: uuid, data_base64: data }) {
+    const row = this.rows.meetings.get(uuid);
+    if (!row || row.owner !== userId) return error(404, 'NOT_FOUND', 'This meeting is not on the server yet.');
+    if (!/^[A-Za-z0-9+/=]+$/.test(data ?? '')) return error(422, 'INVALID', 'Not a picture.');
+
+    this.selfies.set(uuid, data);
+    row.rev = ++this.rev;
+    return json(200, { status: 'stored' });
+  }
+
   upload(userId, { expense_uuid: uuid, data_base64: data }) {
     const row = this.rows.expenses.get(uuid);
     if (!row || row.owner !== userId) return error(404, 'NOT_FOUND', 'This expense is not on the server yet.');
@@ -292,4 +318,10 @@ export class FakeOffice {
     row.rev = ++this.rev;
     return json(200, { status: 'stored' });
   }
+}
+
+function haversine(a, b) {
+  const rad = (d) => (d * Math.PI) / 180;
+  const x = Math.sin(rad(b.lat - a.lat) / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lng - a.lng) / 2) ** 2;
+  return Math.round(2 * 6_371_000 * Math.asin(Math.sqrt(x)));
 }

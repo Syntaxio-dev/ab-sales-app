@@ -2,6 +2,7 @@ import * as rules from '../core/rules.js';
 import { normalizePhone } from '../core/phone.js';
 import * as enquiryRules from '../core/enquiry.js';
 import * as meetingRules from '../core/meeting.js';
+import * as geo from '../core/geo.js';
 import { CLIENT_TYPE_IDS, withGuideDefaults } from '../core/guide.js';
 import { PRESET_POSITIONS, cleanPosition, positionKey } from '../core/positions.js';
 import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/crypto.js';
@@ -16,7 +17,7 @@ import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/cr
 
 export class ValidationError extends Error {}
 
-const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', route: 'o:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', script: 's:', bill: 'b:', tomb: 't:' };
+const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', route: 'o:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', script: 's:', bill: 'b:', selfie: 'f:', tomb: 't:' };
 const PROFILE_KEY = 'profile';
 const SYNC_KEY = 'sync';
 const PREFS_KEY = 'prefs';
@@ -35,10 +36,10 @@ const MAX_NOTES_KEPT = 60; // requests for a guide note that were sent are kept 
 const DEFAULTS = {
   expense: { note: '', bill_type: null, work_area: null, has_bill: false, bill_synced: false, status: 'pending', synced: false, sync_error: null, reviewed_at: null, reject_reason: null },
   // assigned_to_* and created_by_* are the office's: the phone shows them and never changes them
-  client: { company: '', phone: '', city: '', notes: '', assigned_to_code: null, assigned_to_name: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
+  client: { company: '', phone: '', city: '', notes: '', lat: null, lng: null, location_accuracy_m: null, location_at: null, assigned_to_code: null, assigned_to_name: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
   contact: { client_id: null, position: '', phone: '', email: '', notes: '', created_by_code: null, created_by_name: null, synced: false, sync_error: null },
   // status 'done' = an old meeting (written after it happened); the other new fields are for planned meetings and routes
-  meeting: { client_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, status: 'done', scheduled_at: null, ended_at: null, route_id: null, result: null, moved_from: null, time_manual: false, synced: false, sync_error: null },
+  meeting: { client_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, status: 'done', scheduled_at: null, ended_at: null, route_id: null, result: null, moved_from: null, time_manual: false, checkin_at: null, checkin_lat: null, checkin_lng: null, checkin_accuracy_m: null, checkin_distance_m: null, has_selfie: false, selfie_synced: false, synced: false, sync_error: null },
   route: { rep_id: null, date: '', title: '', area: '', start_time: '09:00', overnight: false, stops_order: [], synced: false, sync_error: null },
   call: { direction: 'outgoing', number: '', client_id: null, contact_id: null, client_name: '', contact_name: '', duration_seconds: 0, synced: false, sync_error: null },
   enquiry: { client_id: null, client_name: '', contact_id: null, contact_name: '', status: 'new', source: null, items: [], next_followup_at: null, closed_at: null, timeline: [], synced: false, sync_error: null },
@@ -58,7 +59,7 @@ const MUTATORS = [
   'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveContact', 'deleteContact', 'saveMeeting', 'deleteMeeting', 'saveRoute', 'deleteRoute',
   'saveEnquiry', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
   'saveNote', 'setGuideFromServer', 'saveScript', 'deleteScript', 'tickGuideQuestion', 'resetGuideTicks', 'setGuideLearned', 'setGuideClientType',
-  'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced',
+  'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced', 'markSelfieSynced', 'saveSelfieFromServer',
   'putFromServer', 'removeFromServer', 'saveBillFromServer', 'wipeEverything',
 ];
 
@@ -319,6 +320,14 @@ export class Store {
     const me = this.#profile;
     if (old && !this.canEdit(old)) throw new ValidationError(NOT_YOURS);
 
+    // Every client has a saved spot (the check-in of a visit is compared with it). A save that does not mention the spot keeps the old one.
+    const given = input.lat !== undefined || input.lng !== undefined;
+    const spot = given
+      ? { lat: input.lat, lng: input.lng, accuracy_m: input.location_accuracy_m ?? null }
+      : { lat: old?.lat, lng: old?.lng, accuracy_m: old?.location_accuracy_m ?? null };
+    check(geo.spotProblem(spot, { label: 'The client location' }));
+    const spotAt = given ? (input.location_at ?? nowIso()) : (old?.location_at ?? null);
+
     // one number, one place in the pool (the same rule as for a person)
     const phone = normalizePhone(input.phone);
     const taken = phone ? this.numberOwner(phone, { exceptClient: id }) : null;
@@ -330,6 +339,10 @@ export class Store {
       phone: normalizePhone(input.phone) ?? '',
       city: String(input.city ?? '').trim(),
       notes: String(input.notes ?? '').trim(),
+      lat: geo.round6(spot.lat),
+      lng: geo.round6(spot.lng),
+      location_accuracy_m: spot.accuracy_m === null ? null : Math.round(spot.accuracy_m),
+      location_at: spotAt,
       // who added it and who works it are the office's: kept as they were, and for a new client "me" (the office does the same)
       assigned_to_code: old ? old.assigned_to_code : (me?.employee_code ?? null),
       assigned_to_name: old ? old.assigned_to_name : (me?.name ?? null),
@@ -951,7 +964,7 @@ export class Store {
    * A planned meeting can be today up to 90 days ahead (never on a day that has passed); one that happened can be written up to a day ahead.
    * A stop moved to another day leaves its route; the last stop leaving deletes the route.
    */
-  async saveMeeting(input) {
+  async saveMeeting(input, { selfie = null } = {}) {
     const id = input.id ?? crypto.randomUUID();
     const old = this.#meetings.get(id);
     const keep = (name, fallback = null) => (input[name] === undefined ? (old?.[name] ?? fallback) : input[name]);
@@ -967,6 +980,11 @@ export class Store {
     const moved = movedRaw ? Date.parse(movedRaw) : null;
     const result = keep('result');
     const followup = input.next_followup_at ? Date.parse(input.next_followup_at) : null;
+
+    // Check-in: the spot and the selfie taken at the client. input.checkin = { lat, lng, accuracy_m, at } (new or retaken); with none, the old one stays.
+    const cin = input.checkin ?? null;
+    const cinAt = cin ? Date.parse(cin.at ?? nowIso()) : null;
+    const hasCheckin = Boolean(cin || old?.checkin_at);
 
     // a planned meeting has one time: the plan (meeting_at follows it, so the office and the old screens still sort by it)
     const when = open ? (planned ?? at) : at;
@@ -988,7 +1006,19 @@ export class Store {
       !Number.isNaN(when) && changedTime ? (open ? meetingRules.plannedWindowProblem(new Date(when)) : status === 'done' ? meetingRules.loggedWindowProblem(new Date(when)) : null) : null,
       followup !== null && (Number.isNaN(followup) || followup < when) ? 'Follow-up must be after the meeting.' : null,
       followup !== null && followup > Date.now() + TWO_YEARS ? 'A follow-up can be at most 2 years ahead.' : null,
+      cin ? geo.spotProblem(cin, { label: 'The check-in location' }) : null,
+      cin && (Number.isNaN(cinAt) || cinAt > Date.now() + 5 * 60_000) ? 'The check-in time is not valid.' : null,
+      cin && !selfie ? 'Take the selfie to check in.' : null,
+      selfie && !rules.imageKind(selfie) ? 'Please use a JPG, PNG or WebP picture.' : null,
+      selfie && selfie.length > rules.MAX_BILL_BYTES ? 'The picture is bigger than 5 MB.' : null,
+      // a visit becomes "done" only with a check-in (an old meeting that is already done can still be edited, and an old-style record that names no status is a plain log)
+      status === 'done' && !hasCheckin && (old ? old.status !== 'done' : input.status !== undefined) ? 'Check in at the client first: take a selfie at the place.' : null,
     );
+    let client = null;
+    if (cin) {
+      client = input.client_id ? this.#clients.get(input.client_id) : null;
+      await this.#writeBytes(PREFIX.selfie + id, selfie);
+    }
 
     // the route: joining needs the same day and room; an old member whose day changed leaves quietly
     let routeId = keep('route_id');
@@ -1025,6 +1055,13 @@ export class Store {
       result: status === 'done' ? (result ?? null) : null,
       moved_from: moved === null ? null : new Date(moved).toISOString(),
       time_manual: keep('time_manual', false) === true,
+      checkin_at: cin ? new Date(cinAt).toISOString() : (old?.checkin_at ?? null),
+      checkin_lat: cin ? geo.round6(cin.lat) : (old?.checkin_lat ?? null),
+      checkin_lng: cin ? geo.round6(cin.lng) : (old?.checkin_lng ?? null),
+      checkin_accuracy_m: cin ? (cin.accuracy_m === null || cin.accuracy_m === undefined ? null : Math.round(cin.accuracy_m)) : (old?.checkin_accuracy_m ?? null),
+      checkin_distance_m: cin ? (geo.hasLocation(client) ? geo.distanceM({ lat: client.lat, lng: client.lng }, cin) : null) : (old?.checkin_distance_m ?? null),
+      has_selfie: cin ? true : (old?.has_selfie ?? false),
+      selfie_synced: cin ? false : (old?.selfie_synced ?? false),
       synced: false,
       sync_error: null,
       created_at: old?.created_at ?? nowIso(),
@@ -1044,6 +1081,7 @@ export class Store {
   async deleteMeeting(id) {
     const old = this.#meetings.get(id);
     await this.#persist.del(PREFIX.meeting + id);
+    await this.#persist.del(PREFIX.selfie + id);
     this.#meetings.delete(id);
     await this.#remember('meeting', id);
     if (old?.route_id) await this.#leaveRoute(old.route_id, id);
@@ -1217,9 +1255,32 @@ export class Store {
   async removeFromServer(kind, id) {
     await this.#persist.del(PREFIX[kind] + id);
     if (kind === 'expense') await this.#persist.del(PREFIX.bill + id);
+    if (kind === 'meeting') await this.#persist.del(PREFIX.selfie + id);
     this.#map(kind).delete(id);
     if (kind === 'client' || kind === 'contact') this.#phoneIndex = null;
     this.#changed(false);
+  }
+
+  async selfieFor(meetingId) {
+    return this.#readBytes(PREFIX.selfie + meetingId);
+  }
+
+  async hasSelfieData(meetingId) {
+    this.#assertOpen();
+    return (await this.#persist.get(PREFIX.selfie + meetingId)) !== null;
+  }
+
+  async markSelfieSynced(id) {
+    const record = this.#meetings.get(id);
+    if (record) await this.#put('meeting', { ...record, selfie_synced: true });
+  }
+
+  async saveSelfieFromServer(id, bytes) {
+    const record = this.#meetings.get(id);
+    if (!record) return;
+
+    await this.#writeBytes(PREFIX.selfie + id, bytes);
+    await this.#put('meeting', { ...record, has_selfie: true, selfie_synced: true });
   }
 
   async saveBillFromServer(id, bytes) {

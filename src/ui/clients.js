@@ -46,6 +46,7 @@ export function openClientPage(app, clientId) {
           line('Main number', client.phone),
           line('Group', client.company),
           line('Added by', store.addedBy(client)),
+          line('Location', client.lat === null || client.lat === undefined ? 'Not saved yet' : `Saved (${client.lat.toFixed(4)}, ${client.lng.toFixed(4)})`),
           line('Notes', client.notes)),
         store.canEdit(client)
           ? h('button', { class: 'btn small-btn block', style: { marginTop: '10px' }, onclick: () => openClientForm(app, client) }, icon('edit', 18), 'Edit client')

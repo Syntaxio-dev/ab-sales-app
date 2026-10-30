@@ -93,7 +93,7 @@ test('call matching is opt-in: nothing is read unless the person turned it on', 
 test('the manifest asks for the internet and the call history, nothing else of its own', () => {
   const manifest = readFileSync(new URL('../android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
   const permissions = [...manifest.matchAll(/<uses-permission android:name="([^"]+)"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(permissions, ['android.permission.INTERNET', 'android.permission.READ_CALL_LOG']);
+  assert.deepEqual(permissions, ['android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION', 'android.permission.INTERNET', 'android.permission.READ_CALL_LOG']);
 });
 
 test('the native call-history reader only reads', () => {

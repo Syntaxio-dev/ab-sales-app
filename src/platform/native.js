@@ -1,7 +1,8 @@
 import { SecureStorage } from '@aparajita/capacitor-secure-storage';
 import { registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
-import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Camera, CameraDirection, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Geolocation } from '@capacitor/geolocation';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
@@ -99,14 +100,33 @@ export async function createNativePlatform() {
       },
     },
 
-    // source: 'camera' | 'gallery' -> Uint8Array of a JPEG, or null when the person cancelled
+    // The phone's position, read once (never watched). -> { lat, lng, accuracy_m }. Throws an Error whose .code is DENIED, OFF or TIMEOUT.
+    async locate() {
+      try {
+        const status = await Geolocation.checkPermissions();
+        if (status.location !== 'granted') {
+          const asked = await Geolocation.requestPermissions({ permissions: ['location'] });
+          if (asked.location !== 'granted') throw Object.assign(new Error('Location permission was not given.'), { code: 'DENIED' });
+        }
+        const p = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 });
+        return { lat: p.coords.latitude, lng: p.coords.longitude, accuracy_m: Number.isFinite(p.coords.accuracy) ? p.coords.accuracy : null };
+      } catch (error) {
+        if (error?.code === 'DENIED') throw error;
+        const text = String(error?.message ?? '');
+        const code = /denied|permission/i.test(text) ? 'DENIED' : /disabled|unavailable|settings/i.test(text) ? 'OFF' : 'TIMEOUT';
+        throw Object.assign(new Error(text || 'Could not read the location.'), { code });
+      }
+    },
+
+    // source: 'camera' | 'gallery' | 'selfie' (front camera, never the gallery) -> Uint8Array of a JPEG, or null when the person cancelled
     async pickPhoto(source) {
       try {
         const photo = await Camera.getPhoto({
           quality: 70,
           width: 1600,
           resultType: CameraResultType.Base64,
-          source: source === 'camera' ? CameraSource.Camera : CameraSource.Photos,
+          source: source === 'gallery' ? CameraSource.Photos : CameraSource.Camera,
+          ...(source === 'selfie' ? { direction: CameraDirection.Front } : {}),
           correctOrientation: true,
           saveToGallery: false,
         });

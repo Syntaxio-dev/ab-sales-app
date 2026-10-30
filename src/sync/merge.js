@@ -3,6 +3,7 @@ import { CLIENT_TYPE_IDS } from '../core/guide.js';
 import { isSource } from '../core/enquiry.js';
 import { RESULTS, STATUSES as MEETING_STATUSES, validStartTime } from '../core/meeting.js';
 import * as rules from '../core/rules.js';
+import * as geo from '../core/geo.js';
 
 // What the office sends back is NOT trusted blindly: every record is checked with the same rules as a record typed on the phone
 // before it is stored (wrong types, huge texts, impossible dates are dropped). The screens also only ever show text as text.
@@ -50,6 +51,15 @@ export function cleanExpense(r) {
   };
 }
 
+// A saved spot from the office: both numbers valid or none (an office that does not know locations sends none).
+function cleanSpot(lat, lng, accuracy) {
+  const a = typeof lat === 'string' ? Number(lat) : lat;
+  const b = typeof lng === 'string' ? Number(lng) : lng;
+  if (!geo.validCoords(a, b)) return null;
+  const acc = typeof accuracy === 'number' && geo.isAccuracy(accuracy) ? Math.round(accuracy) : null;
+  return { lat: geo.round6(a), lng: geo.round6(b), accuracy: acc };
+}
+
 export function cleanClient(r) {
   if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
 
@@ -64,6 +74,10 @@ export function cleanClient(r) {
     phone: normalizePhone(text(r.phone, 30)) ?? '', // one spelling, so a call can be matched to it
     city: text(r.city, 100),
     notes: text(r.notes, rules.MAX_NOTE),
+    ...(() => {
+      const spot = cleanSpot(r.lat, r.lng, r.location_accuracy_m);
+      return { lat: spot?.lat ?? null, lng: spot?.lng ?? null, location_accuracy_m: spot?.accuracy ?? null, location_at: spot && r.location_at ? moment(r.location_at) : null };
+    })(),
     // who added it / who works it: the office's, shown on the phone and never sent back
     assigned_to_code: r.assigned_to_code ? text(r.assigned_to_code, 30) : null,
     assigned_to_name: r.assigned_to_name ? text(r.assigned_to_name, 100) : null,
@@ -215,6 +229,20 @@ export function cleanMeeting(r) {
     result: RESULTS.some((x) => x.value === r.result) ? r.result : null,
     moved_from: r.moved_from ? moment(r.moved_from) : null,
     time_manual: r.time_manual === true,
+    // check-in with a selfie (an office that does not know it sends none)
+    ...(() => {
+      const spot = r.checkin_at ? cleanSpot(r.checkin_lat, r.checkin_lng, r.checkin_accuracy_m) : null;
+      const dist = spot && Number.isFinite(r.checkin_distance_m) && r.checkin_distance_m >= 0 ? Math.round(r.checkin_distance_m) : null;
+      return {
+        checkin_at: spot ? moment(r.checkin_at) : null,
+        checkin_lat: spot?.lat ?? null,
+        checkin_lng: spot?.lng ?? null,
+        checkin_accuracy_m: spot?.accuracy ?? null,
+        checkin_distance_m: dist,
+        has_selfie: Boolean(spot) && r.has_selfie === true,
+        selfie_synced: Boolean(spot) && r.has_selfie === true,
+      };
+    })(),
     created_at: updated,
     updated_at: updated,
   };
@@ -341,6 +369,16 @@ export function decide(kind, local, server) {
 }
 
 // A phone that took the photo but has not uploaded it yet must not lose the flag when the office copy (no photo yet) replaces it.
+// Same for a selfie taken on the phone but not uploaded yet, and for a check-in the office has not heard about.
+export function keepPendingCheckin(local, cleaned) {
+  if (local?.checkin_at && !cleaned.checkin_at) {
+    const keep = ['checkin_at', 'checkin_lat', 'checkin_lng', 'checkin_accuracy_m', 'checkin_distance_m', 'has_selfie', 'selfie_synced'];
+    return { ...cleaned, ...Object.fromEntries(keep.map((k) => [k, local[k]])) };
+  }
+  if (local?.has_selfie && !local.selfie_synced && cleaned.checkin_at && !cleaned.has_selfie) return { ...cleaned, has_selfie: true, selfie_synced: false };
+  return cleaned;
+}
+
 export function keepPendingBill(local, cleaned) {
   if (local?.has_bill && !cleaned.has_bill) return { ...cleaned, has_bill: true, bill_synced: local.bill_synced };
   return cleaned;

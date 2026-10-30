@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 
 import {
-  SOURCES, addBudget, askedBrands, askedProducts, byUrgency, daysAgo, groupRupees, guideBrands, isSource, itemsSummary, lastVisit, needsAction, openEnquiriesOf,
+  SOURCES, addBudget, askedBrands, askedProducts, byUrgency, daysAgo, frequentBrands, groupRupees, guideBrands, isSource, itemsSummary, lastVisit, needsAction, openEnquiriesOf,
   recentClients, searchClients, shortMoney, sourceLabel, splitBrands, urgency,
 } from '../src/core/enquiry.js';
 import { reportId } from '../src/core/ids.js';
@@ -205,7 +205,7 @@ test('the same rep and day always give the same report id', async () => {
 
 test('the figures of a day are counted from what is on the phone', async () => {
   const { store } = await phone();
-  const client = await store.saveClient({ name: 'JK Cement', phone: '98765 43210' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', phone: '98765 43210' });
   await store.saveCalls([
     { id: crypto.randomUUID(), direction: 'outgoing', number: '+919876543210', client_id: client.id, client_name: 'JK Cement', started_at: iso(-120_000), duration_seconds: 120 },
     { id: crypto.randomUUID(), direction: 'missed', number: '+919876543210', client_id: client.id, client_name: 'JK Cement', started_at: iso(-60_000), duration_seconds: 0 },
@@ -458,4 +458,18 @@ test('budget chips add to what is typed, and the box shows Indian grouping', () 
   assert.equal(groupRupees('3,00,000'), '3,00,000');
   assert.equal(groupRupees(''), '');
   assert.equal(groupRupees('1.2.3'), '1.2.3', 'not a number: left alone for the check to refuse');
+});
+
+test('frequent brands: the ones the rep writes most, over all products, even before a product is chosen', () => {
+  const enquiries = [
+    enq('c1', 1, [item('Muffle Furnace', 'Labtech, Remi')]),
+    enq('c2', 2, [item('Hot Air Oven', 'remi')]),
+    enq('c3', 3, [item('Balance', 'Remi, Local')]),
+  ];
+
+  const got = frequentBrands(enquiries);
+  assert.equal(got[0], 'Remi', 'Remi was written three times');
+  assert.deepEqual([...got].sort(), ['Labtech', 'Local', 'Remi']);
+  assert.equal(frequentBrands(enquiries, 2).length, 2);
+  assert.deepEqual(frequentBrands([]), []);
 });

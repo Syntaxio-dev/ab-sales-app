@@ -758,3 +758,11 @@ textarea.script-input { min-height: 220px; line-height: 1.55; }
 .route-line .chip { flex: none; }
 a.btn { text-decoration: none; }
 .visit-call { min-height: 46px; }
+
+/* enquiry form: nothing may push the page sideways (long product and brand names wrap or shorten inside their chip) */
+.page-body:has(.enq-step) { overflow-x: clip; }
+.enq-step, .enq-step > *, .pcard, .pcard-body > * { min-width: 0; max-width: 100%; }
+.pcard-body { grid-template-columns: minmax(0, 1fr); }
+.pcard-body .quick-picks .filter, .pcard-body .brand-add { max-width: 100%; box-sizing: border-box; }
+.pcard-body .quick-picks .filter { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard-body .quick-picks .filter.with-icon { display: inline-flex; align-items: center; gap: 6px; }

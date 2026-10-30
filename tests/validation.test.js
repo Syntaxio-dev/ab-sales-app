@@ -52,9 +52,9 @@ test('the store refuses a number that is not a real Indian number', async () => 
   assert.equal(rules.phone('+91 98765 43210'), null);
   assert.equal(rules.phone('+971 50 123 4567'), null);
 
-  const client = await store.saveClient({ name: 'JK Cement', phone: '+91 1412345678' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', phone: '+91 1412345678' });
   assert.equal(client.phone, '+911412345678', 'a landline with its area code is a real number too');
-  await assert.rejects(store.saveClient({ name: 'Bad Phone Ltd', phone: '+91 12345' }), ValidationError);
+  await assert.rejects(store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Bad Phone Ltd', phone: '+91 12345' }), ValidationError);
 });
 
 test('a person\'s name has letters only; a company name may have digits and & ( ) . ,', () => {
@@ -70,10 +70,10 @@ test('a person\'s name has letters only; a company name may have digits and & ( 
 });
 
 test('the store applies the same name rules, so a bug in a screen cannot save a bad record', async () => {
-  await assert.rejects(store.saveClient({ name: '<script>alert(1)</script>' }), ValidationError);
-  await assert.rejects(store.saveClient({ name: 'JK Cement', city: 'Jaipur 302001' }), ValidationError);
+  await assert.rejects(store.saveClient({ lat: 26.9124, lng: 75.7873, name: '<script>alert(1)</script>' }), ValidationError);
+  await assert.rejects(store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', city: 'Jaipur 302001' }), ValidationError);
 
-  const client = await store.saveClient({ name: 'JK Cement', city: 'Nimbahera' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', city: 'Nimbahera' });
   await assert.rejects(store.saveContact({ client_id: client.id, name: 'Rohit 2' }), ValidationError);
   await assert.rejects(store.saveContact({ client_id: client.id, name: 'Rohit Sharma', email: 'not an email' }), ValidationError);
   await assert.rejects(store.saveContact({ client_id: client.id, name: 'Rohit Sharma', phone: '12345' }), ValidationError);

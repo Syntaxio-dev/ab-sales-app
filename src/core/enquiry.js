@@ -168,6 +168,11 @@ export function askedBrands(enquiries, product) {
   return ranked(newest.flatMap((e) => e.items.filter((i) => lower(i.product) === key).flatMap((i) => splitBrands(i.brands))));
 }
 
+// The brands this rep writes most often, over all their enquiries (most used first): shown before any product is chosen.
+export function frequentBrands(enquiries, limit = 8) {
+  return ranked(enquiries.flatMap((e) => e.items.flatMap((i) => splitBrands(i.brands)))).slice(0, limit);
+}
+
 // "Remi, Labtech" <-> ['Remi', 'Labtech'] (the enquiry keeps one comma-separated text, as always)
 export const splitBrands = (text) => [...new Map(String(text ?? '').split(',').map((b) => b.trim()).filter(Boolean).map((b) => [lower(b), b])).values()];
 export const joinBrands = (list) => list.join(', ');

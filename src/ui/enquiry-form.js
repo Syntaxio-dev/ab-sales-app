@@ -1,5 +1,5 @@
 import {
-  MAX_ITEMS, SOURCES, STATUSES, addBudget, askedBrands, askedProducts, daysAgo, groupRupees, guideBrands, joinBrands, openEnquiriesOf,
+  MAX_ITEMS, SOURCES, STATUSES, addBudget, askedBrands, askedProducts, daysAgo, frequentBrands, groupRupees, guideBrands, joinBrands, openEnquiriesOf,
   shortMoney, splitBrands, statusLabel, itemsSummary,
 } from '../core/enquiry.js';
 import * as rules from '../core/rules.js';
@@ -158,7 +158,6 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
   const itemsBox = h('div', { class: 'stack' });
   const totalLine = h('p', { class: 'muted small enq-total' });
   const addProduct = h('button', { type: 'button', class: 'enq-add', onclick: () => addItem() }, icon('plus', 18), 'Add another product');
-  const datalist = h('datalist', { id: 'asked-products' }, asked.slice(0, 40).map((name) => h('option', { value: name })));
 
   const budgetPaise = (item) => {
     const text = item.budget.replace(/,/g, '').trim();
@@ -166,7 +165,7 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
   };
 
   function makeCard(item) {
-    const productInput = businessInput({ list: 'asked-products', placeholder: 'For example Muffle Furnace', value: item.product });
+    const productInput = businessInput({ placeholder: 'For example Muffle Furnace', value: item.product });
     const product = field('Product', productInput);
     const suggestLabel = h('p', { class: 'eyebrow' });
     const suggestRow = h('div', { class: 'chips quick-picks' });
@@ -192,7 +191,7 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
     // brands: chips from earlier enquiries and the guide, plus one the rep types
     let adding = false;
     const brandRow = h('div', { class: 'chips quick-picks', role: 'group', 'aria-label': 'Preferred brands' });
-    const brands = slot(h('div', null, h('p', { class: 'eyebrow' }, 'Preferred brands (optional)'), brandRow), brandRow);
+    const brands = slot(h('div', null, h('p', { class: 'eyebrow' }, 'Preferred brands (optional)'), h('p', { class: 'muted small' }, 'Tap to pick, or add one that is not listed.'), brandRow), brandRow);
     const hasBrand = (name) => item.brands.some((b) => lower(b) === lower(name));
 
     const addBrand = (raw) => {
@@ -211,7 +210,8 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
     };
 
     function drawBrands() {
-      const suggestions = unique([...askedBrands(enquiries, item.product), ...guideBrands(catalogue, item.product)]).slice(0, 8);
+      // this product's brands first, then the ones the rep uses most: so the row is never empty, even before a product is picked
+      const suggestions = unique([...askedBrands(enquiries, item.product), ...guideBrands(catalogue, item.product), ...frequentBrands(enquiries)]).slice(0, 8);
       const names = unique([...suggestions, ...item.brands]);
       const box = businessInput({ class: 'brand-add', placeholder: 'Brand', maxLength: 40, 'aria-label': 'Another brand', enterKeyHint: 'done' });
 
@@ -243,7 +243,7 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
             drawBrands();
             brandRow.querySelector('.brand-add')?.focus();
           },
-        }, icon('plus', 15)));
+        }, icon('plus', 15), 'Add brand'));
     }
 
     // budget: a big rupee box; the chips add to it
@@ -442,7 +442,7 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
 
   stepEls.push(
     h('div', { class: 'stack enq-step' }, stepHead(0), whoPicker.searchBox, clientSlot.el, whoBox),
-    h('div', { class: 'stack enq-step' }, stepHead(1), datalist, itemsBox),
+    h('div', { class: 'stack enq-step' }, stepHead(1), itemsBox),
     h('div', { class: 'stack enq-step' }, stepHead(2),
       followSlot.el, picker,
       section('Stage', stageBox),

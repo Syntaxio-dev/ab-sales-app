@@ -41,12 +41,20 @@ export async function createWebPlatform() {
       },
     },
 
+    // For looking at the screens only: a test page may set globalThis.__AB_FAKE_LOCATION__ = { lat, lng, accuracy_m } (or { error: 'DENIED' }).
+    async locate() {
+      const fake = globalThis.__AB_FAKE_LOCATION__;
+      if (!fake || fake.error) throw Object.assign(new Error('Location is not available in the browser preview.'), { code: fake?.error ?? 'OFF' });
+      return { lat: fake.lat, lng: fake.lng, accuracy_m: fake.accuracy_m ?? 10 };
+    },
+
     pickPhoto(source) {
       return new Promise((resolve) => {
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = 'image/jpeg,image/png,image/webp';
         if (source === 'camera') input.capture = 'environment';
+        if (source === 'selfie') input.capture = 'user';
 
         input.addEventListener('change', async () => {
           const file = input.files?.[0];

@@ -66,7 +66,7 @@ test('a wrong password signs nobody in and stores nothing', async () => {
 
 test('signing out keeps every record on the phone and drops the token', async () => {
   const { store, engine } = await phone();
-  await store.saveClient({ name: 'Lab Co' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
 
   await engine.signOut();
 
@@ -79,7 +79,7 @@ test('signing out keeps every record on the phone and drops the token', async ()
 
 test('what is saved on the phone reaches the office once, and is then marked as sent', async () => {
   const { store, engine } = await phone();
-  const client = await store.saveClient({ name: 'Lab Co', phone: '98765 43210' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co', phone: '98765 43210' });
   await store.saveExpense(expense());
   await store.saveMeeting({ client_id: client.id, client_name: 'Lab Co', meeting_at: new Date().toISOString(), purpose: 'Demo' });
   assert.equal(store.unsyncedCount, 3);
@@ -135,7 +135,7 @@ test('many quick saves and a sync at the same moment never lose or double anythi
   const { store, engine } = await phone();
   const names = Array.from({ length: 12 }, (_, i) => `Client ${i}`);
 
-  await Promise.all([...names.map((name) => store.saveClient({ name })), engine.syncNow(), engine.syncNow()]);
+  await Promise.all([...names.map((name) => store.saveClient({ lat: 26.9124, lng: 75.7873, name })), engine.syncNow(), engine.syncNow()]);
   await engine.syncNow();
 
   assert.equal(store.clients.length, 12);
@@ -161,7 +161,7 @@ test('offline: nothing is lost, the reason is shown, and the next sync sends it'
 
 test('a server error leaves everything to be tried again', async () => {
   const { store, engine } = await phone();
-  await store.saveClient({ name: 'Lab Co' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
   office.failPushWith = 500;
 
   await engine.syncNow();
@@ -175,7 +175,7 @@ test('a server error leaves everything to be tried again', async () => {
 
 test('a record the office refuses is kept, explained, and not sent again until it is edited', async () => {
   const { store, engine } = await phone();
-  const client = await store.saveClient({ name: 'Lab Co' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
   office.validate = (kind, r) => (kind === 'clients' ? 'The office does not like this name.' : null);
 
   const first = await engine.syncNow();
@@ -189,7 +189,7 @@ test('a record the office refuses is kept, explained, and not sent again until i
   assert.ok(office.calls.length > calls);
 
   office.validate = () => null;
-  await store.saveClient({ id: client.id, name: 'Lab Company' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, id: client.id, name: 'Lab Company' });
   assert.equal(store.refused.length, 0, 'editing clears the refusal');
   await engine.syncNow();
   assert.equal(office.count('clients'), 1);
@@ -236,10 +236,10 @@ test('the office decision wins even over an edit the phone had not sent yet', as
 
 test('changes on the phone that were not sent beat an older office copy', async () => {
   const { store, engine } = await phone();
-  const c = await store.saveClient({ name: 'Old Name' });
+  const c = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Old Name' });
   await engine.syncNow();
 
-  await store.saveClient({ id: c.id, name: 'New Name' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, id: c.id, name: 'New Name' });
   office.offline = true;
   await engine.syncNow();
   office.offline = false;
@@ -253,7 +253,7 @@ test('changes on the phone that were not sent beat an older office copy', async 
 
 test('a delete is remembered until the office has heard of it', async () => {
   const { store, engine } = await phone();
-  const client = await store.saveClient({ name: 'Lab Co' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
   await engine.syncNow();
 
   await store.deleteClient(client.id);
@@ -272,7 +272,7 @@ test('a delete is remembered until the office has heard of it', async () => {
 
 test('a phone that was never linked does not collect delete memories', async () => {
   const { store } = await phone({ connect: false });
-  const client = await store.saveClient({ name: 'Lab Co' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
 
   await store.deleteClient(client.id);
   assert.equal(store.tombstones.length, 0);
@@ -280,7 +280,7 @@ test('a phone that was never linked does not collect delete memories', async () 
 
 test('a deleted record does not come back from the office', async () => {
   const { store, engine } = await phone();
-  const client = await store.saveClient({ name: 'Lab Co' });
+  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
   await engine.syncNow();
 
   office.offline = true;
@@ -293,8 +293,8 @@ test('a deleted record does not come back from the office', async () => {
 
 test('a record deleted on the office side (from another phone of the same rep) disappears here too', async () => {
   const { store, engine } = await phone();
-  const gone = await store.saveClient({ name: 'Gone One' });
-  await store.saveClient({ name: 'Stays' });
+  const gone = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Gone One' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Stays' });
   await engine.syncNow();
 
   office.rows.clients.get(gone.id).deleted = true;
@@ -310,7 +310,7 @@ test('a record deleted on the office side (from another phone of the same rep) d
 
 test('a new phone gets everything back, including bill photos', async () => {
   const old = await phone();
-  const client = await old.store.saveClient({ name: 'Lab Co', phone: '98765 43210' });
+  const client = await old.store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co', phone: '98765 43210' });
   const e = await old.store.saveExpense(expense({ note: 'with photo' }), { bill: jpeg });
   await old.store.saveMeeting({ client_id: client.id, client_name: 'Lab Co', meeting_at: new Date().toISOString(), next_followup_at: new Date(Date.now() + 86_400_000).toISOString() });
   await old.engine.syncNow();
@@ -345,7 +345,7 @@ test('another rep never sees these records', async () => {
 
 test('a big backlog comes back in pages', async () => {
   const a = await phone();
-  for (let i = 0; i < 7; i++) await a.store.saveClient({ name: `Client ${i}` });
+  for (let i = 0; i < 7; i++) await a.store.saveClient({ lat: 26.9124, lng: 75.7873, name: `Client ${i}` });
   await a.engine.syncNow();
   office.limit = 3;
 
@@ -457,7 +457,7 @@ test('a different account starts from the beginning (no cursor of the other acco
 
 test('only one sync runs at a time; a change during it triggers one more right after', async () => {
   const { store, engine } = await phone();
-  await store.saveClient({ name: 'One' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'One' });
 
   let inside = 0;
   let maxInside = 0;
@@ -477,20 +477,20 @@ test('saving something starts a sync by itself a moment later, and stop() ends t
   const { store, engine } = await phone();
   engine.start();
 
-  await store.saveClient({ name: 'Auto' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Auto' });
   await until(() => office.count('clients') === 1 && store.unsyncedCount === 0);
   assert.equal(office.count('clients'), 1);
   assert.equal(store.unsyncedCount, 0);
 
   engine.stop();
-  await store.saveClient({ name: 'After stop' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'After stop' });
   await sleep(150); // a negative: it must stay unsent, so there is nothing to wait for
   assert.equal(office.count('clients'), 1);
 });
 
 test('the engine does nothing without a token', async () => {
   const { store, engine } = await phone({ connect: false });
-  await store.saveClient({ name: 'Local only' });
+  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Local only' });
 
   await engine.syncNow();
   assert.equal(office.calls.length, 0);
