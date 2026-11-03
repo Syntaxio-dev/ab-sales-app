@@ -1,3 +1,4 @@
+import logoUrl from '../../assets/ab-logo.png';
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { pinInput } from './auth.js';
@@ -35,6 +36,17 @@ function appearance() {
   draw();
 
   return group('Appearance', el, h('p', { class: 'muted small', style: { marginTop: '8px' } }, 'System follows your phone\'s light or dark setting.'));
+}
+
+// The last block of Settings: the app, who made it, and which version this is.
+function aboutCard() {
+  const version = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
+
+  return h('div', { class: 'card pad about' },
+    h('img', { class: 'logo-img about-logo', src: logoUrl, alt: 'Agarwal Brothers' }),
+    h('p', { class: 'about-name' }, 'Agarwal Brothers Sales'),
+    h('p', { class: 'muted small' }, 'Developed by Ayush Sharma'),
+    h('p', { class: 'muted small' }, `Version ${version}`));
 }
 
 export function openSettings(app) {
@@ -160,11 +172,11 @@ export function openSettings(app) {
 
       group('Privacy', h('div', { class: 'card pad muted small' },
         'This app saves your expenses, bill photos, clients and meetings on this phone only, encrypted and locked with your PIN. ',
-        'It does not read your messages, contacts or location. Your call history is read only if you turn on call matching, and then only calls with numbers saved in your clients are kept. Only after you connect to the office, it sends your expenses, bill photos, clients and meetings to the office over a secure connection, and nothing else. ',
+        'It does not read your messages or contacts. Your location is read only at the moment you tap a button to check in at a client, and never in the background. Your call history is read only if you turn on call matching, and then only calls with numbers saved in your clients are kept. Only after you connect to the office, it sends your expenses, bill photos, clients and meetings to the office over a secure connection, and nothing else. ',
         'The app locks itself after a minute in the background, and hides its screen in the recent-apps list.')),
 
       group('Danger zone', h('div', { class: 'card' }, row('trash', 'Erase all data', 'Deletes everything on this phone and starts again.', erase, { danger: true }))),
 
-      h('p', { class: 'muted small', style: { textAlign: 'center', marginTop: '24px' } }, `Agarwal Brothers Sales · version ${typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev'}`)),
+      aboutCard()),
   });
 }

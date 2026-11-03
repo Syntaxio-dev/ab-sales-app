@@ -784,3 +784,9 @@ a.btn { text-decoration: none; }
 .mp-credit { position: absolute; left: 8px; bottom: 6px; z-index: 500; margin: 0; padding: 2px 6px; border-radius: 8px; background: var(--surface); color: var(--mute); font: 600 10.5px/1.2 var(--font-ui); }
 .mp-status { min-height: 2.6em; }
 .btn.is-off { opacity: 0.55; }
+
+/* the About block at the end of Settings */
+.about { display: grid; justify-items: center; gap: 4px; text-align: center; margin-top: 24px; }
+.about-logo { width: 150px; margin-bottom: 6px; }
+.about-name { margin: 0; font: 600 16px/1.2 var(--font-head); color: var(--ink); }
+.about .muted { margin: 0; }
