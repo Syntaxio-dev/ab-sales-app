@@ -78,6 +78,8 @@ export function locationField(app, { existing = null, getName = () => '', getPla
   const say = (text, tone = '') => {
     status.textContent = text;
     status.dataset.tone = tone;
+    // the message is at the top of this block: bring it into view, so the rep sees what happened to the link
+    if (text && tone) status.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
   };
 
   const draw = () => {
