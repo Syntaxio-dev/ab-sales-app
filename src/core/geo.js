@@ -57,8 +57,8 @@ export function checkinLabel(meeting) {
 // link with @lat,lng / !3dLAT!4dLNG / q=lat,lng in it. Only the two numbers are kept, never the text. A short link carries no numbers.
 const NUM = '(-?\\d{1,3}\\.\\d{3,})';
 const SPOT_PATTERNS = [
-  new RegExp('@' + NUM + ',' + NUM),
-  new RegExp('!3d' + NUM + '!4d' + NUM),
+  new RegExp('!3d' + NUM + '!4d' + NUM), // the exact place
+  new RegExp('@' + NUM + ',' + NUM), // the middle of the screen when the link was made
   new RegExp('[?&](?:q|ll|query)=' + NUM + ',' + NUM),
   new RegExp('^\\s*' + NUM + '\\s*[,; ]\\s*' + NUM + '\\s*$'),
 ];
@@ -78,4 +78,10 @@ export function parseSpot(text) {
   return null;
 }
 
-export const SPOT_HELP = 'In Google Maps press and hold on the exact spot of the client. Copy the numbers that appear at the top (like 26.9124, 75.7873) and paste them here. A long link of that spot works too; a short link does not.';
+// The first https address in a text ("Agarwal Brothers / Sitapura / https://maps.app.goo.gl/abc" -> the link).
+export function firstUrl(text) {
+  const m = /https:\/\/[^\s<>"']+/i.exec(String(text ?? ''));
+  return m ? m[0].replace(/[.,);]+$/, '') : null;
+}
+
+export const SPOT_HELP = 'No internet or no link? Press and hold on the exact spot in Google Maps, copy the two numbers that appear at the top (like 26.9124, 75.7873) and paste them in the box.';

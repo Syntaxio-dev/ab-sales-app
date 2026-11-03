@@ -11,9 +11,3 @@ export const API_BASE = address ? `${address}/api/sales/v1` : '';
 
 // Plain http is only allowed for a server on this very computer, and only in the development build.
 export const ALLOW_LOCAL_HTTP = Boolean(import.meta.env?.DEV);
-
-// Google Maps for the client-location picker. The key and the two addresses come from the build (vite.config.js defines them), exactly like
-// the office address; the Content-Security-Policy lists what Google Maps needs only when a key is set. No key = no map in this build.
-export const MAPS_KEY = typeof __MAPS_KEY__ === 'string' ? __MAPS_KEY__ : '';
-export const MAPS_JS_URL = typeof __MAPS_JS__ === 'string' ? __MAPS_JS__ : '';
-export const PLACES_URL = typeof __PLACES_URL__ === 'string' ? __PLACES_URL__ : '';

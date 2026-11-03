@@ -517,6 +517,17 @@ export class SyncEngine {
     return true;
   }
 
+  // A link copied from Google Maps -> the exact place. The office opens the link (only Google Maps addresses) and reads it.
+  // -> { lat, lng, name } or throws SyncError (OFFLINE when the office cannot be reached, NOT_FOUND when the link has no place).
+  async resolveMapLink(text) {
+    const answer = await this.#http.post('/tools/resolve-map-link', { text: String(text ?? '').slice(0, 1500) }, { token: this.#token() });
+    const lat = Number(answer?.lat);
+    const lng = Number(answer?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new SyncError('NOT_FOUND', 'No place in this link.');
+
+    return { lat, lng, name: typeof answer?.name === 'string' ? answer.name.slice(0, 120) : null };
+  }
+
   #token() {
     const token = this.#store.syncState?.token;
     if (!token) throw new SyncError('UNAUTHENTICATED', 'Please sign in to the office again.');

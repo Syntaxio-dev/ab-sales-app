@@ -100,6 +100,7 @@ export class FakeOffice {
     if (path === '/sync/pull') return this.pull(userId, u.searchParams.get('since'));
     if (path === '/uploads/bill' && method === 'POST') return this.upload(userId, body);
     if (path === '/uploads/selfie' && method === 'POST') return this.uploadSelfie(userId, body);
+    if (path === '/tools/resolve-map-link' && method === 'POST') return this.resolveMapLink(body);
     if (path === '/products' && method === 'GET') {
       return u.searchParams.get('version') === this.productsVersion
         ? json(200, { version: this.productsVersion, unchanged: true })
@@ -299,6 +300,13 @@ export class FakeOffice {
     out.cursor = String(capped ?? this.rev);
     out.server_time = new Date().toISOString();
     return json(200, out);
+  }
+
+  // The office opens a Google Maps link and reads the place (here: a short link always means the same shop in Jaipur).
+  resolveMapLink({ text }) {
+    this.mapLinkAsked = (this.mapLinkAsked ?? 0) + 1;
+    if (/maps\.app\.goo\.gl\/ok/.test(String(text))) return json(200, { lat: 26.9124, lng: 75.7873, name: 'Agarwal Brothers' });
+    return error(404, 'NOT_FOUND', 'Could not find the place in this link.');
   }
 
   open(clientUuid, userId) {

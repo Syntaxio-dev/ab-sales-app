@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 
-import { CHECKIN_RADIUS_M, checkinLabel, checkinState, distanceM, formatDistance, parseSpot, spotProblem, validCoords } from '../src/core/geo.js';
+import { CHECKIN_RADIUS_M, checkinLabel, checkinState, distanceM, firstUrl, formatDistance, parseSpot, spotProblem, validCoords } from '../src/core/geo.js';
 import { MemoryPersist } from '../src/data/persist.js';
 import { Store, ValidationError } from '../src/data/store.js';
 import { aesKey, randomBytes } from '../src/security/crypto.js';
@@ -273,4 +273,31 @@ test('an office that does not know exact locations breaks nothing and the phone 
   assert.equal(a.store.clientById(client.id).lat, JAIPUR.lat, 'the answer without a spot does not wipe it');
   assert.ok(a.store.meetingById(done.id).checkin_at);
   assert.equal(a.store.meetingById(done.id).has_selfie, true);
+});
+
+test('a long link gives the exact place, not the middle of the screen; a shared text gives its link', () => {
+  const long = 'https://www.google.com/maps/place/Agarwal+Brothers/@26.9100,75.7800,17z/data=!3m1!4b1!8m2!3d26.9124!4d75.7873';
+  assert.deepEqual(parseSpot(long), { lat: 26.9124, lng: 75.7873 });
+  assert.deepEqual(parseSpot('https://www.google.com/maps/@26.9100,75.7800,17z'), { lat: 26.91, lng: 75.78 });
+
+  assert.equal(firstUrl('Agarwal Brothers\nSitapura, Jaipur\nhttps://maps.app.goo.gl/abc123.'), 'https://maps.app.goo.gl/abc123');
+  assert.equal(firstUrl('no link here'), null);
+  assert.equal(firstUrl('http://plain.example/x'), null, 'only https');
+  assert.equal(parseSpot('https://maps.app.goo.gl/abc123'), null, 'a short link carries no numbers');
+});
+
+test('the phone asks the office to read a Google Maps link, and refuses what comes back wrong', async () => {
+  const a = await phone();
+
+  const found = await a.engine.resolveMapLink('Agarwal Brothers\nhttps://maps.app.goo.gl/ok123');
+  assert.deepEqual(found, { lat: 26.9124, lng: 75.7873, name: 'Agarwal Brothers' });
+  assert.equal(office.mapLinkAsked, 1);
+
+  await assert.rejects(a.engine.resolveMapLink('https://maps.app.goo.gl/nothing'), /Could not find the place/);
+
+  // an answer with a made-up place is not taken
+  const real = office.resolveMapLink.bind(office);
+  office.resolveMapLink = () => ({ ok: true, status: 200, json: async () => ({ lat: 999, lng: 5, name: 'x' }), text: async () => '{}' });
+  await assert.rejects(a.engine.resolveMapLink('https://maps.app.goo.gl/ok123'), /No place/);
+  office.resolveMapLink = real;
 });
