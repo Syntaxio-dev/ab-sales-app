@@ -16,7 +16,7 @@ const daysAgo = (n) => {
   const d = new Date(Date.now() - n * 86_400_000);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
-const expense = (extra = {}) => ({ category: 'fuel', bill_type: 'with_bill', work_area: 'local', amount_paise: 45000, expense_date: today(), note: '', ...extra });
+const expense = (extra = {}) => ({ category: 'fuel', bill_type: 'without_bill', work_area: 'local', amount_paise: 45000, expense_date: today(), note: '', ...extra });
 const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
 
 beforeEach(async () => {
@@ -26,7 +26,7 @@ beforeEach(async () => {
 
 test('records survive closing and opening again with the same key', async () => {
   let store = await Store.open(persist, key);
-  const saved = await store.saveExpense(expense({ note: '  taxi  ' }), { bill: jpeg });
+  const saved = await store.saveExpense(expense({ note: '  taxi  ', bill_type: 'with_bill' }), { bill: jpeg });
   await store.close();
 
   store = await Store.open(persist, key);
@@ -40,7 +40,7 @@ test('records survive closing and opening again with the same key', async () => 
 
 test('what reaches the disk is not readable text', async () => {
   const store = await Store.open(persist, key);
-  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Zebra Laboratories', phone: '9876543210', city: 'Jaipur', notes: 'secret-note-xyz' });
+  await store.saveClient({ city: 'Jaipur', lat: 26.9124, lng: 75.7873, name: 'Zebra Laboratories', phone: '9876543210', city: 'Jaipur', notes: 'secret-note-xyz' });
   await store.saveExpense(expense({ note: 'private-expense-note' }));
 
   const everything = [...persist.data.values()].join('|');
@@ -129,7 +129,7 @@ test('status cannot be set from the phone, and an edit keeps it', async () => {
 test('newest day comes first; deleting an expense deletes its photo', async () => {
   const store = await Store.open(persist, key);
   const old = await store.saveExpense(expense({ expense_date: daysAgo(3) }));
-  const fresh = await store.saveExpense(expense(), { bill: jpeg });
+  const fresh = await store.saveExpense(expense({ bill_type: 'with_bill' }), { bill: jpeg });
 
   assert.deepEqual(store.expenses.map((e) => e.id), [fresh.id, old.id]);
 
@@ -140,7 +140,7 @@ test('newest day comes first; deleting an expense deletes its photo', async () =
 
 test('removing a photo keeps the expense', async () => {
   const store = await Store.open(persist, key);
-  const saved = await store.saveExpense(expense(), { bill: jpeg });
+  const saved = await store.saveExpense(expense({ bill_type: 'with_bill' }), { bill: jpeg });
   const edited = await store.saveExpense({ ...expense(), id: saved.id }, { removeBill: true });
 
   assert.equal(edited.has_bill, false);
@@ -150,16 +150,16 @@ test('removing a photo keeps the expense', async () => {
 test('a client phone is stored in one spelling, and a bad phone is refused', async () => {
   const store = await Store.open(persist, key);
 
-  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co', phone: '98765 43210' });
+  const client = await store.saveClient({ city: 'Jaipur', lat: 26.9124, lng: 75.7873, name: 'Lab Co', phone: '98765 43210' });
   assert.equal(client.phone, '+919876543210');
 
-  await assert.rejects(store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Bad', phone: '12' }), ValidationError);
-  await assert.rejects(store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'A' }), ValidationError);
+  await assert.rejects(store.saveClient({ city: 'Jaipur', lat: 26.9124, lng: 75.7873, name: 'Bad', phone: '12' }), ValidationError);
+  await assert.rejects(store.saveClient({ city: 'Jaipur', lat: 26.9124, lng: 75.7873, name: 'A' }), ValidationError);
 });
 
 test('a meeting keeps the client name when the client is deleted; follow-up must be after the meeting', async () => {
   const store = await Store.open(persist, key);
-  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
+  const client = await store.saveClient({ city: 'Jaipur', lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
   const at = new Date().toISOString();
   const later = new Date(Date.now() + 7 * 86_400_000).toISOString();
   const earlier = new Date(Date.now() - 86_400_000).toISOString();
@@ -202,9 +202,9 @@ test('listeners hear about changes and can stop listening', async () => {
   let calls = 0;
   const stop = store.subscribe(() => calls++);
 
-  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
+  await store.saveClient({ city: 'Jaipur', lat: 26.9124, lng: 75.7873, name: 'Lab Co' });
   stop();
-  await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'Other Co' });
+  await store.saveClient({ city: 'Jaipur', lat: 26.9124, lng: 75.7873, name: 'Other Co' });
 
   assert.equal(calls, 1);
 });

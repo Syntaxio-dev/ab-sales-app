@@ -37,6 +37,7 @@ const wireOf = {
   }),
   client: (r) => ({
     uuid: r.id, name: r.name, company: r.company, phone: r.phone, city: r.city, notes: r.notes, updated_at: r.updated_at,
+    lat: r.lat, lng: r.lng, location_accuracy_m: r.location_accuracy_m, location_at: r.location_at,
   }),
   contact: (r) => ({ uuid: r.id, client_uuid: r.client_id, name: r.name, position: r.position, phone: r.phone, email: r.email, notes: r.notes, updated_at: r.updated_at }),
   meeting: (r) => ({
@@ -424,10 +425,13 @@ export class SyncEngine {
 
   // ---- pull ---------------------------------------------------------------------------------------
 
-  async #pull(summary) {
+  async #pull(summary, again = false) {
     // A phone that was updated from a version without the shared client pool holds a cursor that is later than the pool's older rows:
     // it asks for everything once ("pool_v2"), then goes on from the cursor.
-    let since = summary.fullPull || !this.#store.syncState?.pool_v2 ? null : (this.#store.syncState?.cursor ?? null);
+    const full = summary.fullPull || !this.#store.syncState?.pool_v2;
+    let since = full ? null : (this.#store.syncState?.cursor ?? null);
+    // A full pull is the whole list of what this rep may see: whatever else is stored (a client the manager closed for them) is dropped.
+    const seen = full ? { client: new Set(), contact: new Set() } : null;
 
     for (let page = 0; page < PULL_PAGES; page++) {
       const answer = await this.#http.get('/sync/pull', { token: this.#token(), query: since ? { since } : {} });
@@ -436,6 +440,7 @@ export class SyncEngine {
 
       for (const { kind, wire } of KINDS) {
         for (const incoming of answer[wire] ?? []) {
+          if (seen?.[kind] && typeof incoming?.uuid === 'string') seen[kind].add(incoming.uuid);
           if (await this.#merge(kind, incoming, deleting)) summary.pulled++;
         }
       }
@@ -447,6 +452,21 @@ export class SyncEngine {
 
       if (answer.has_more !== true) {
         if (!this.#store.syncState?.pool_v2) await this.#store.saveSyncState({ pool_v2: true });
+
+        if (seen) {
+          for (const kind of ['client', 'contact']) await this.#store.pruneAbsent(kind, seen[kind]);
+        }
+
+        // The office tells which clients and people this rep may see (a fingerprint). When it changed since the last time (access given or taken
+        // away), fetch the whole list once so what is no longer open is dropped. An office that sends none is left alone.
+        if (typeof answer.scope === 'string') {
+          const changed = answer.scope !== this.#store.syncState?.scope;
+          await this.#store.saveSyncState({ scope: answer.scope });
+          if (changed && !seen && !again) {
+            summary.fullPull = true;
+            await this.#pull(summary, true);
+          }
+        }
         return;
       }
     }
@@ -489,6 +509,8 @@ export class SyncEngine {
 
     if (kind === 'expense') cleaned = keepPendingBill(local, cleaned);
     if (kind === 'meeting') cleaned = keepPendingCheckin(local, cleaned);
+    // an office that does not know exact locations sends no such key: it must not wipe the spot the rep gave
+    if (kind === 'client' && !('lat' in incoming) && local?.lat !== null && local?.lat !== undefined) cleaned = { ...cleaned, lat: local.lat, lng: local.lng, location_accuracy_m: local.location_accuracy_m, location_at: local.location_at, location_source: local.location_source };
     // an office that does not know "came through" yet sends no such key: it must not wipe what the rep chose (null sent on purpose does)
     if (kind === 'enquiry' && !('source' in incoming) && local?.source) cleaned = { ...cleaned, source: local.source };
     await this.#store.putFromServer(kind, cleaned);

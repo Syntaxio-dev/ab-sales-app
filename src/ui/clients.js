@@ -46,7 +46,7 @@ export function openClientPage(app, clientId) {
           line('Main number', client.phone),
           line('Group', client.company),
           line('Added by', store.addedBy(client)),
-          line('Location', client.lat === null || client.lat === undefined ? 'Waiting for the office to set it' : 'Set by the office. Check in here on a visit.'),
+          line('Location', client.lat === null || client.lat === undefined ? 'Not saved yet' : client.location_source === 'office' ? 'Set by the office' : 'Saved from Google Maps'),
           line('Notes', client.notes)),
         store.canEdit(client)
           ? h('button', { class: 'btn small-btn block', style: { marginTop: '10px' }, onclick: () => openClientForm(app, client) }, icon('edit', 18), 'Edit client')

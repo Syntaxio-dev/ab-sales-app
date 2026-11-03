@@ -36,7 +36,7 @@ const MAX_NOTES_KEPT = 60; // requests for a guide note that were sent are kept 
 const DEFAULTS = {
   expense: { note: '', bill_type: null, work_area: null, has_bill: false, bill_synced: false, status: 'pending', synced: false, sync_error: null, reviewed_at: null, reject_reason: null },
   // assigned_to_* and created_by_* are the office's: the phone shows them and never changes them
-  client: { company: '', phone: '', city: '', notes: '', lat: null, lng: null, location_accuracy_m: null, location_at: null, assigned_to_code: null, assigned_to_name: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
+  client: { company: '', phone: '', city: '', notes: '', lat: null, lng: null, location_accuracy_m: null, location_at: null, location_source: null, assigned_to_code: null, assigned_to_name: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
   contact: { client_id: null, position: '', phone: '', email: '', notes: '', created_by_code: null, created_by_name: null, synced: false, sync_error: null },
   // status 'done' = an old meeting (written after it happened); the other new fields are for planned meetings and routes
   meeting: { client_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, status: 'done', scheduled_at: null, ended_at: null, route_id: null, result: null, moved_from: null, time_manual: false, checkin_at: null, checkin_lat: null, checkin_lng: null, checkin_accuracy_m: null, checkin_distance_m: null, has_selfie: false, selfie_synced: false, synced: false, sync_error: null },
@@ -60,7 +60,7 @@ const MUTATORS = [
   'saveEnquiry', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
   'saveNote', 'setGuideFromServer', 'saveScript', 'deleteScript', 'tickGuideQuestion', 'resetGuideTicks', 'setGuideLearned', 'setGuideClientType',
   'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced', 'markSelfieSynced', 'saveSelfieFromServer',
-  'putFromServer', 'removeFromServer', 'saveBillFromServer', 'wipeEverything',
+  'putFromServer', 'removeFromServer', 'pruneAbsent', 'saveBillFromServer', 'wipeEverything',
 ];
 
 const MAX_SCRIPT = 3000;
@@ -243,6 +243,10 @@ export class Store {
     // Once the office has decided, the expense is final on the phone too (the server refuses changes anyway).
     if (old && old.status !== 'pending') throw new ValidationError('The office already reviewed this expense, so it cannot be changed.');
 
+    // "With bill" needs the photo: a new one, or the one already stored (and not being removed)
+    const hadBill = (await this.#persist.get(PREFIX.bill + id)) !== null;
+    if (input.bill_type === 'with_bill' && !bill && (removeBill || !hadBill)) throw new ValidationError('Take a photo of the bill. It is required when you choose "With bill".');
+
     if (bill) await this.#writeBytes(PREFIX.bill + id, bill);
     if (removeBill) await this.#persist.del(PREFIX.bill + id);
     const hasBill = (await this.#persist.get(PREFIX.bill + id)) !== null;
@@ -311,7 +315,7 @@ export class Store {
       rules.businessName(input.name, { label: 'Name' }),
       rules.businessName(input.company, { label: 'Company', requiredField: false }),
       rules.phone(input.phone),
-      rules.place(input.city, { label: 'Place' }),
+      rules.place(input.city === undefined ? this.#clients.get(input.id)?.city : input.city, { label: 'Place', requiredField: true }),
       rules.optional(input.notes, { max: rules.MAX_NOTE, label: 'Notes' }),
     );
 
@@ -320,8 +324,14 @@ export class Store {
     const me = this.#profile;
     if (old && !this.canEdit(old)) throw new ValidationError(NOT_YOURS);
 
-    // The client's spot is the OFFICE's: the manager sets it on the website and the phone only receives it. A rep cannot set or change it
-    // (they could stand in the office and "confirm" every client from there), so whatever a screen passes in is ignored.
+    // The exact spot (from Google Maps) is required. The rep who adds the client gives it; once the manager has set or corrected it on the
+    // website (`location_source` 'office') it is the office's and a rep's edit cannot move it. A save that says nothing about it keeps the old one.
+    const locked = old?.location_source === 'office';
+    const given = !locked && (input.lat !== undefined || input.lng !== undefined);
+    const spot = given
+      ? { lat: input.lat, lng: input.lng, accuracy_m: input.location_accuracy_m ?? null }
+      : { lat: old?.lat, lng: old?.lng, accuracy_m: old?.location_accuracy_m ?? null };
+    check(geo.spotProblem(spot, { label: 'The exact location of the client' }));
 
     // one number, one place in the pool (the same rule as for a person)
     const phone = normalizePhone(input.phone);
@@ -332,12 +342,13 @@ export class Store {
       name: input.name.trim(),
       company: String(input.company ?? '').trim(),
       phone: normalizePhone(input.phone) ?? '',
-      city: String(input.city ?? '').trim(),
+      city: String(input.city === undefined ? (old?.city ?? '') : input.city).trim(),
       notes: String(input.notes ?? '').trim(),
-      lat: old?.lat ?? null,
-      lng: old?.lng ?? null,
-      location_accuracy_m: old?.location_accuracy_m ?? null,
-      location_at: old?.location_at ?? null,
+      lat: geo.round6(spot.lat),
+      lng: geo.round6(spot.lng),
+      location_accuracy_m: spot.accuracy_m === null ? null : Math.round(spot.accuracy_m),
+      location_at: given ? (input.location_at ?? nowIso()) : (old?.location_at ?? null),
+      location_source: locked ? 'office' : given ? 'rep' : (old?.location_source ?? 'rep'),
       // who added it and who works it are the office's: kept as they were, and for a new client "me" (the office does the same)
       assigned_to_code: old ? old.assigned_to_code : (me?.employee_code ?? null),
       assigned_to_name: old ? old.assigned_to_name : (me?.name ?? null),
@@ -1248,12 +1259,17 @@ export class Store {
   }
 
   async removeFromServer(kind, id) {
+    await this.#dropRecord(kind, id);
+    this.#changed(false);
+  }
+
+  // (not a queued method itself: pruneAbsent and removeFromServer both use it from inside the queue)
+  async #dropRecord(kind, id) {
     await this.#persist.del(PREFIX[kind] + id);
     if (kind === 'expense') await this.#persist.del(PREFIX.bill + id);
     if (kind === 'meeting') await this.#persist.del(PREFIX.selfie + id);
     this.#map(kind).delete(id);
     if (kind === 'client' || kind === 'contact') this.#phoneIndex = null;
-    this.#changed(false);
   }
 
   async selfieFor(meetingId) {
@@ -1276,6 +1292,15 @@ export class Store {
 
     await this.#writeBytes(PREFIX.selfie + id, bytes);
     await this.#put('meeting', { ...record, has_selfie: true, selfie_synced: true });
+  }
+
+  // After a full pull: drop the clients / people the office did not send (they are no longer open to this rep). Records still waiting to be
+  // sent stay.
+  async pruneAbsent(kind, keep) {
+    for (const record of [...this.#map(kind).values()]) {
+      if (record.synced && !keep.has(record.id)) await this.#dropRecord(kind, record.id);
+    }
+    this.#changed(false);
   }
 
   async saveBillFromServer(id, bytes) {

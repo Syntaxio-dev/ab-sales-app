@@ -52,3 +52,30 @@ export function checkinLabel(meeting) {
   if (state === 'no_client_location') return 'Checked in · client location missing';
   return 'No check-in';
 }
+
+// A spot from what the rep pastes from Google Maps: "26.9124, 75.7873" (press and hold on the spot, the numbers appear at the top) or a long
+// link with @lat,lng / !3dLAT!4dLNG / q=lat,lng in it. Only the two numbers are kept, never the text. A short link carries no numbers.
+const NUM = '(-?\\d{1,3}\\.\\d{3,})';
+const SPOT_PATTERNS = [
+  new RegExp('@' + NUM + ',' + NUM),
+  new RegExp('!3d' + NUM + '!4d' + NUM),
+  new RegExp('[?&](?:q|ll|query)=' + NUM + ',' + NUM),
+  new RegExp('^\\s*' + NUM + '\\s*[,; ]\\s*' + NUM + '\\s*$'),
+];
+
+export function parseSpot(text) {
+  let value = String(text ?? '').trim();
+  try { value = decodeURIComponent(value); } catch { /* keep the text as it is */ }
+
+  for (const pattern of SPOT_PATTERNS) {
+    const m = pattern.exec(value);
+    if (m) {
+      const lat = round6(Number(m[1]));
+      const lng = round6(Number(m[2]));
+      return validCoords(lat, lng) ? { lat, lng } : null;
+    }
+  }
+  return null;
+}
+
+export const SPOT_HELP = 'In Google Maps press and hold on the exact spot of the client. Copy the numbers that appear at the top (like 26.9124, 75.7873) and paste them here. A long link of that spot works too; a short link does not.';

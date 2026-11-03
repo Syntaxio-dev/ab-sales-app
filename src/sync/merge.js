@@ -76,7 +76,13 @@ export function cleanClient(r) {
     notes: text(r.notes, rules.MAX_NOTE),
     ...(() => {
       const spot = cleanSpot(r.lat, r.lng, r.location_accuracy_m);
-      return { lat: spot?.lat ?? null, lng: spot?.lng ?? null, location_accuracy_m: spot?.accuracy ?? null, location_at: spot && r.location_at ? moment(r.location_at) : null };
+      return {
+        lat: spot?.lat ?? null,
+        lng: spot?.lng ?? null,
+        location_accuracy_m: spot?.accuracy ?? null,
+        location_at: spot && r.location_at ? moment(r.location_at) : null,
+        location_source: spot ? (r.location_source === 'office' ? 'office' : 'rep') : null,
+      };
     })(),
     // who added it / who works it: the office's, shown on the phone and never sent back
     assigned_to_code: r.assigned_to_code ? text(r.assigned_to_code, 30) : null,

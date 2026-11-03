@@ -143,7 +143,7 @@ test('the result and the status are checked; a result only belongs to a visit th
 
 test('only logged meetings count in the daily report, and a planned visit is not a visit that happened', async () => {
   const store = await open();
-  const client = await store.saveClient({ lat: 26.9124, lng: 75.7873, name: 'JK Cement', phone: '98765 43210' });
+  const client = await store.saveClient({ city: 'Jaipur', lat: 26.9124, lng: 75.7873, name: 'JK Cement', phone: '98765 43210' });
   await store.saveMeeting({ client_id: client.id, client_name: 'JK Cement', meeting_at: new Date().toISOString(), status: 'done', ...SPOT }, SELFIE);
   await store.saveMeeting({ client_id: client.id, client_name: 'JK Cement', ...planned(0, 23, 59), status: 'planned' });
 

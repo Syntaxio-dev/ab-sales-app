@@ -25,6 +25,8 @@ export class FakeOffice {
     this.productsVersion = 'v0000000000000001';
     this.bills = new Map();      // expense uuid -> base64
     this.selfies = new Map();    // meeting uuid -> base64 (the check-in selfie)
+    this.restrictPool = false;   // true = the office of v1.10: a rep sees only their own clients and people plus the clients opened for them (`open(clientUuid, userId)`)
+    this.opened = new Map();     // client uuid -> Set of user ids the manager opened it for
     this.ignoresLocation = false; // true = an office that does not know client locations and check-ins: it keeps none of those fields
     this.rev = 0;
     this.offline = false;
@@ -286,16 +288,45 @@ export class FakeOffice {
     let capped = null;
 
     for (const kind of KINDS.filter((k) => !NOT_PULLED.has(k) && !(k === 'routes' && this.ignoresPlanning))) {
-      const rows = [...this.rows[kind].values()].filter((r) => (SHARED.has(kind) || r.owner === userId) && r.rev >= from).sort((a, b) => a.rev - b.rev);
+      const rows = [...this.rows[kind].values()].filter((r) => (SHARED.has(kind) ? this.canSee(kind, r, userId) : r.owner === userId) && r.rev >= from).sort((a, b) => a.rev - b.rev);
       const page = rows.slice(0, this.limit);
       if (rows.length > this.limit) { capped = Math.min(capped ?? Infinity, page.at(-1).rev); out.has_more = true; }
       out[kind] = page.map((r) => this.shape(kind, r));
     }
 
     out.positions = [...this.positions];
+    if (this.restrictPool) out.scope = this.scope(userId);
     out.cursor = String(capped ?? this.rev);
     out.server_time = new Date().toISOString();
     return json(200, out);
+  }
+
+  open(clientUuid, userId) {
+    if (!this.opened.has(clientUuid)) this.opened.set(clientUuid, new Set());
+    this.opened.get(clientUuid).add(userId);
+  }
+
+  close(clientUuid, userId) {
+    this.opened.get(clientUuid)?.delete(userId);
+  }
+
+  clientSeen(row, userId) {
+    return row.owner === userId || row.assignedTo === userId || Boolean(this.opened.get(row.data.uuid)?.has(userId));
+  }
+
+  canSee(kind, row, userId) {
+    if (!this.restrictPool) return true;
+    if (kind === 'clients') return this.clientSeen(row, userId);
+    if (kind === 'contacts') {
+      const client = row.data.client_uuid ? this.rows.clients.get(row.data.client_uuid) : null;
+      return (row.owner === userId || Boolean(client && this.clientSeen(client, userId)));
+    }
+    return true;
+  }
+
+  scope(userId) {
+    const ids = (kind) => [...this.rows[kind].values()].filter((r) => !r.deleted && this.canSee(kind, r, userId)).map((r) => r.data.uuid).sort().join(',');
+    return `${ids('clients')}|${ids('contacts')}`;
   }
 
   uploadSelfie(userId, { meeting_uuid: uuid, data_base64: data }) {

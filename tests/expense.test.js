@@ -14,7 +14,7 @@ import { formatPicked, parseValue } from '../src/ui/pickers.js';
 let store;
 const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
 const today = () => new Date().toISOString().slice(0, 10);
-const expense = (extra = {}) => ({ category: 'parking', amount_paise: 6000, expense_date: today(), note: '', work_area: 'local', bill_type: 'with_bill', ...extra });
+const expense = (extra = {}) => ({ category: 'parking', amount_paise: 6000, expense_date: today(), note: '', work_area: 'local', bill_type: 'without_bill', ...extra });
 
 beforeEach(async () => {
   store = await Store.open(new MemoryPersist(), await aesKey(randomBytes(32)));
@@ -41,7 +41,7 @@ test('the work area and the bill answer are required, with no way around it', as
 });
 
 test('"without bill" never keeps a photo', async () => {
-  const saved = await store.saveExpense(expense(), { bill: jpeg });
+  const saved = await store.saveExpense(expense({ bill_type: 'with_bill' }), { bill: jpeg });
   assert.equal(saved.has_bill, true);
 
   const edited = await store.saveExpense({ ...expense({ bill_type: 'without_bill' }), id: saved.id });
@@ -85,4 +85,18 @@ test('picker values are read and shown', () => {
   assert.match(formatPicked('date', '2026-10-26'), /26 Oct 2026/);
   assert.match(formatPicked('datetime', '2026-10-26T16:30'), /26 Oct 2026.*4:30\s?pm/i);
   assert.equal(formatPicked('date', ''), '');
+});
+
+test('"with bill" needs the photo: a new one, or the one already stored', async () => {
+  const store = await Store.open(new MemoryPersist(), await aesKey(randomBytes(32)));
+
+  await assert.rejects(store.saveExpense(expense({ bill_type: 'with_bill' })), /photo of the bill/i);
+  assert.equal(store.expenses.length, 0);
+
+  const saved = await store.saveExpense(expense({ bill_type: 'with_bill' }), { bill: jpeg });
+  const edited = await store.saveExpense({ ...expense({ bill_type: 'with_bill' }), id: saved.id, note: 'edited' });
+  assert.equal(edited.has_bill, true, 'an edit keeps the photo that is already there');
+
+  await assert.rejects(store.saveExpense({ ...expense({ bill_type: 'with_bill' }), id: saved.id }, { removeBill: true }), /photo of the bill/i);
+  assert.ok(await store.saveExpense(expense({ bill_type: 'without_bill' })), 'without a bill needs no photo');
 });

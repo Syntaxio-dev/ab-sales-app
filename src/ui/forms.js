@@ -5,6 +5,7 @@ import { capitalize, dayString, formatDay, rupees } from './format.js';
 import { businessInput, cityPicks, phoneField, placeInput } from './inputs.js';
 import { chipGroup, confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
 import { dateInput } from './pickers.js';
+import { locationField } from './location.js';
 import { openContactForm } from './people.js';
 
 
@@ -83,7 +84,7 @@ export function openExpenseForm(app, existing = null) {
   const work = choice('Work area', workGroup, 'Local is in Jaipur. Outstation is outside Jaipur.');
   const billGroup = chipGroup(rules.BILL_TYPES.map((b) => ({ value: b, label: rules.BILL_TYPE_LABELS[b] })), existing?.bill_type ?? (existing?.has_bill ? 'with_bill' : null), () => {
     billChoice.setError(null);
-    billZone.hidden = billGroup.value !== 'with_bill';
+    billSlot.el.hidden = billGroup.value !== 'with_bill';
   });
   const billChoice = choice('Bill', billGroup);
 
@@ -112,7 +113,9 @@ export function openExpenseForm(app, existing = null) {
     },
   }, icon('trash', 18), 'Remove photo');
 
+  let shown = false; // is a photo on the screen
   function showBill(bytes) {
+    shown = Boolean(bytes);
     if (billUrl) URL.revokeObjectURL(billUrl);
     billUrl = bytes ? URL.createObjectURL(new Blob([bytes])) : null;
     preview.replaceChildren(...(bytes ? [h('img', { class: 'bill', src: billUrl, alt: 'Bill photo' })] : []));
@@ -131,6 +134,7 @@ export function openExpenseForm(app, existing = null) {
       newBill = bytes;
       removeBill = false;
       showBill(bytes);
+      billSlot.setError(null);
     } catch {
       toast('The camera could not be opened.');
     } finally {
@@ -140,12 +144,13 @@ export function openExpenseForm(app, existing = null) {
 
   // the photo box only shows when the rep says there is a bill
   const billZone = h('div', { class: 'bill-drop' },
-    h('div', { class: 'bill-title' }, icon('camera', 20), 'Photo of the bill (optional)'),
+    h('div', { class: 'bill-title' }, icon('camera', 20), 'Photo of the bill (required)'),
     preview,
     // camera only, no gallery: a bill must be photographed now, so an old or edited picture cannot be attached
     h('button', { class: 'btn small-btn block', type: 'button', onclick: () => pick('camera') }, icon('camera', 18), 'Take photo of the bill'),
     removeBtn);
-  billZone.hidden = billGroup.value !== 'with_bill';
+  const billSlot = slot(billZone, null);
+  billSlot.el.hidden = billGroup.value !== 'with_bill';
 
   showBill(null);
   if (existing?.has_bill) store.billFor(existing.id).then((bytes) => !newBill && !removeBill && showBill(bytes));
@@ -157,6 +162,7 @@ export function openExpenseForm(app, existing = null) {
       [date, rules.expenseDate(date.input.value)],
       [work, rules.workArea(workGroup.value)],
       [billChoice, rules.billType(billGroup.value)],
+      [billSlot, billGroup.value === 'with_bill' && !shown ? 'Take a photo of the bill. It is required when you choose "With bill".' : null],
       [note, rules.optional(note.input.value, { max: rules.MAX_NOTE, label: 'Note' })],
     ]);
     if (!ok) return;
@@ -180,7 +186,7 @@ export function openExpenseForm(app, existing = null) {
     body: h('div', { class: 'stack' },
       h('div', null, h('p', { class: 'eyebrow' }, 'Category'), category.el),
       amount.el, date.el, work.el, billChoice.el,
-      billZone,
+      billSlot.el,
       note.el,
       existing ? deleteButton('Delete expense', async () => {
         if (await confirmDialog({ title: 'Delete this expense?', text: 'The bill photo is deleted too. This cannot be undone.' })) {
@@ -205,8 +211,9 @@ export function openClientForm(app, existing = null) {
   // "company" is the old way of writing the same thing: only shown for a client that already has one
   const company = field('Group / company (optional)', businessInput({ value: existing?.company ?? '' }));
   const phone = phoneField('Main number (optional)', { value: existing?.phone ?? '', landline: true, hint: 'For example the office board number.' });
-  const city = field('Place (optional)', placeInput({ placeholder: 'Town or city', value: existing?.city ?? '' }), 'The team can filter clients by place.');
+  const city = field('Place', placeInput({ placeholder: 'Town or city', value: existing?.city ?? '' }), 'Required. The team can filter clients by place.');
   city.input.after(cityPicks(city.input));
+  const where = locationField(app, { existing });
   company.el.hidden = !existing?.company;
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 4, value: existing?.notes ?? '' }));
 
@@ -218,7 +225,8 @@ export function openClientForm(app, existing = null) {
       [name, rules.businessName(name.input.value, { label: 'Name' })],
       [company, rules.businessName(company.input.value, { label: 'Company', requiredField: false })],
       [phone, phone.problem() ?? (taken ? `This number is already saved under ${taken}.` : null)],
-      [city, rules.place(city.input.value, { label: 'Place' })],
+      [city, rules.place(city.input.value, { label: 'Place', requiredField: true })],
+      [where, where.problem()],
       [notes, rules.optional(notes.input.value, { max: rules.MAX_NOTE, label: 'Notes' })],
     ]);
     if (!ok) return;
@@ -232,6 +240,7 @@ export function openClientForm(app, existing = null) {
         phone: phone.value,
         city: city.input.value,
         notes: notes.input.value,
+        ...where.fields,
       });
     });
     if (!done) return;
@@ -243,7 +252,7 @@ export function openClientForm(app, existing = null) {
   const page = openPage({
     title: existing ? 'Edit client' : 'New client',
     body: h('div', { class: 'stack' },
-      name.el, company.el, phone.el, city.el, notes.el,
+      name.el, company.el, phone.el, city.el, where.el, notes.el,
       existing && store.canDelete(existing) ? deleteButton('Delete client', async () => {
         if (await confirmDialog({ title: `Delete ${existing.name}?`, text: 'The client and the people saved under it leave the pool for the whole team. Old meetings keep the name. This cannot be undone.' })) {
           await store.deleteClient(existing.id);
