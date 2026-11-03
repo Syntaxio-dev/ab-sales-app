@@ -101,8 +101,9 @@ test('the native call-history reader only reads', () => {
   assert.doesNotMatch(java, /\.insert\(|\.delete\(|\.update\(|WRITE_CALL_LOG|CALL_PHONE|READ_SMS/);
 });
 
-test('the map picker adds no network code of its own: the search is in http.js, the map addresses come from the build', () => {
+test('the map picker adds no network code of its own: the search is in http.js, the map addresses and key come from the build', () => {
   assert.deepEqual(offenders(/\bfetch\s*\(/, { except: ['sync/http.js'] }), []);
-  assert.deepEqual(offenders(/https?:\/\/[^'"`]*(openstreetmap|nominatim|googleapis|mapbox)/i), [], 'map addresses are written in vite.config.js, not in the code');
-  assert.deepEqual(offenders(/__MAP_TILES__|__GEOCODER_URL__/, { except: ['config.js'] }), []);
+  assert.deepEqual(offenders(/https?:\/\/[^'"`]*(openstreetmap|nominatim|googleapis|gstatic|mapbox)/i), [], 'map addresses are written in vite.config.js, not in the code');
+  assert.deepEqual(offenders(/__MAPS_KEY__|__MAPS_JS__|__PLACES_URL__/, { except: ['config.js'] }), []);
+  assert.deepEqual(offenders(/AIza[0-9A-Za-z_-]{20,}/), [], 'no Google key is written into the code');
 });

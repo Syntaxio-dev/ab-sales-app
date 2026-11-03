@@ -51,6 +51,8 @@ jobs:
       - run: npm run build
         env:
           VITE_SERVER_URL: ${{ vars.SERVER_URL || 'https://mediumpurple-rook-621617.hostingersite.com' }}
+          # Google Maps key for the client-location map (a public build setting: restrict it in Google Cloud). Empty = no map in the APK.
+          VITE_GOOGLE_MAPS_KEY: ${{ vars.GOOGLE_MAPS_KEY }}
       - run: npx cap sync android
       - name: Restore signing key
         run: |

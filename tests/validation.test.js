@@ -99,27 +99,39 @@ test('e-mail, quantity and control characters', () => {
 
 import { searchPlaces } from '../src/sync/http.js';
 
-test('the place search sends only the words, refuses odd answers and keeps valid places', async () => {
-  const calls = [];
-  const fake = (rows, ok = true) => async (url, init) => { calls.push({ url, init }); return { ok, json: async () => rows }; };
-  const base = 'https://geo.example/search';
-
-  assert.deepEqual(await searchPlaces('ab', { base, fetchFn: fake([]) }), [], 'too short: nothing is sent');
-  assert.equal(calls.length, 0);
-
-  const found = await searchPlaces('Jodhpur IIT <script>', {
-    base,
-    fetchFn: fake([{ display_name: 'IIT Jodhpur, Rajasthan', lat: '26.4719', lon: '73.1153' }, { display_name: 'Nowhere', lat: '0', lon: '0' }, { display_name: 'Bad', lat: '999', lon: '5' }, { lat: '1', lon: '1' }]),
-  });
-  assert.deepEqual(found, [{ name: 'IIT Jodhpur, Rajasthan', lat: 26.4719, lng: 73.1153 }]);
-  assert.equal(calls.length, 1, 'one search was sent');
-
+test('the place search sends the words and the key only, refuses odd answers and keeps valid places', async () => {
   const seen = [];
-  await searchPlaces('Jodhpur IIT <script>', { base, fetchFn: async (url, init) => { seen.push({ url, init }); return { ok: true, json: async () => [] }; } });
-  assert.match(seen[0].url, /q=Jodhpur\+IIT\+script/);
-  assert.equal(seen[0].init.credentials, 'omit');
-  assert.equal(seen[0].init.headers.Authorization, undefined, 'no token goes to the map search');
+  const answer = (places, ok = true) => async (url, init) => { seen.push({ url, init }); return { ok, json: async () => ({ places }) }; };
+  const base = 'https://places.example/v1/places:searchText';
+  const key = 'KEY123456789012345678';
 
-  await assert.rejects(searchPlaces('Jodhpur', { base: 'http://geo.example/search', fetchFn: fake([]) }), /must start with https/);
-  await assert.rejects(searchPlaces('Jodhpur', { base, fetchFn: fake([], false) }), /Could not search/);
+  assert.deepEqual(await searchPlaces('ab', { base, key, fetchFn: answer([]) }), [], 'too short: nothing is sent');
+  assert.deepEqual(await searchPlaces('Jodhpur', { base, key: '', fetchFn: answer([]) }), [], 'no key: nothing is sent');
+  assert.equal(seen.length, 0);
+
+  const found = await searchPlaces('IIT Jodhpur <script>', {
+    base,
+    key,
+    near: { lat: 26.9, lng: 75.8 },
+    fetchFn: answer([
+      { displayName: { text: 'IIT Jodhpur' }, formattedAddress: 'NH 62, Karwar, Jodhpur', location: { latitude: 26.4719, longitude: 73.1153 } },
+      { displayName: { text: 'Nowhere' }, formattedAddress: 'x', location: { latitude: 0, longitude: 0 } },
+      { displayName: { text: 'Bad' }, location: { latitude: 999, longitude: 5 } },
+      { displayName: { text: 'No spot' } },
+    ]),
+  });
+  assert.deepEqual(found, [{ name: 'IIT Jodhpur, NH 62, Karwar, Jodhpur', lat: 26.4719, lng: 73.1153 }]);
+
+  const sent = seen[0];
+  assert.equal(sent.init.method, 'POST');
+  assert.equal(sent.init.credentials, 'omit');
+  assert.equal(sent.init.headers['X-Goog-Api-Key'], key);
+  assert.equal(sent.init.headers.Authorization, undefined, 'the office token never goes to the map search');
+  const body = JSON.parse(sent.init.body);
+  assert.equal(body.textQuery, 'IIT Jodhpur script');
+  assert.equal(body.regionCode, 'IN');
+  assert.ok(body.locationBias.circle);
+
+  await assert.rejects(searchPlaces('Jodhpur', { base: 'http://places.example/x', key, fetchFn: answer([]) }), /must start with https/);
+  await assert.rejects(searchPlaces('Jodhpur', { base, key, fetchFn: answer([], false) }), /Could not search/);
 });

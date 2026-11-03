@@ -91,25 +91,27 @@ export function createHttp({ base, fetchFn = (...args) => fetch(...args), timeou
   };
 }
 
-// Search a place by name for the map picker (OpenStreetMap's Nominatim). Only the typed words leave the phone: no token, no cookies, no
-// identity. -> [{ name, lat, lng }], at most 6, India first. Throws SyncError('OFFLINE') when it cannot be reached.
-export async function searchPlaces(query, { base, fetchFn = (...args) => fetch(...args), timeoutMs = 12_000 } = {}) {
+// Search a place by name for the map picker (Google Places, text search: shops, colleges, factories, addresses). Only the typed words, the
+// build's map key and a rough area leave the phone: no office token, no cookies, no identity. -> [{ name, lat, lng }], at most 6, India.
+// Throws SyncError('OFFLINE') when it cannot be reached.
+export async function searchPlaces(query, { base, key, near = null, fetchFn = (...args) => fetch(...args), timeoutMs = 12_000 } = {}) {
   const text = String(query ?? '').replace(/[\u0000-\u001F\u007F<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 150);
-  if (text.length < 3 || !base) return [];
+  if (text.length < 3 || !base || !key) return [];
 
-  const url = assertSecureBase(base, false);
-  url.searchParams.set('q', text);
-  url.searchParams.set('format', 'jsonv2');
-  url.searchParams.set('limit', '6');
-  url.searchParams.set('countrycodes', 'in');
+  const url = assertSecureBase(base, false).toString();
+  const body = { textQuery: text, regionCode: 'IN', maxResultCount: 6 };
+  if (near && Number.isFinite(near.lat) && Number.isFinite(near.lng)) {
+    body.locationBias = { circle: { center: { latitude: near.lat, longitude: near.lng }, radius: 50_000 } };
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetchFn(url.toString(), {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
+    const response = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location' },
+      body: JSON.stringify(body),
       signal: controller.signal,
       redirect: 'error',
       credentials: 'omit',
@@ -118,11 +120,14 @@ export async function searchPlaces(query, { base, fetchFn = (...args) => fetch(.
     });
     if (!response.ok) throw new Error('bad answer');
 
-    const rows = await response.json();
-    if (!Array.isArray(rows)) return [];
+    const answer = await response.json();
+    const rows = Array.isArray(answer?.places) ? answer.places : [];
 
-    return rows.slice(0, 6).map((r) => ({ name: String(r.display_name ?? '').slice(0, 160), lat: Number(r.lat), lng: Number(r.lon) }))
-      .filter((r) => r.name && Number.isFinite(r.lat) && Number.isFinite(r.lng) && Math.abs(r.lat) <= 90 && Math.abs(r.lng) <= 180 && !(r.lat === 0 && r.lng === 0));
+    return rows.slice(0, 6).map((r) => {
+      const title = String(r?.displayName?.text ?? '').trim();
+      const address = String(r?.formattedAddress ?? '').trim();
+      return { name: [title, address].filter(Boolean).join(', ').slice(0, 180), lat: Number(r?.location?.latitude), lng: Number(r?.location?.longitude) };
+    }).filter((r) => r.name && Number.isFinite(r.lat) && Number.isFinite(r.lng) && Math.abs(r.lat) <= 90 && Math.abs(r.lng) <= 180 && !(r.lat === 0 && r.lng === 0));
   } catch {
     throw new SyncError('OFFLINE', 'Could not search. Check the internet.');
   } finally {

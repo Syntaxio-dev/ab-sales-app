@@ -16,34 +16,33 @@ function serverOrigin(env) {
   return url.origin;
 }
 
-// The map picker (client location): where the map pictures and the place search come from. Fixed at build time like the office
-// address, so the app can only ever talk to these two hosts besides the office. Empty = no map in this build.
-const TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const GEOCODER = 'https://nominatim.openstreetmap.org/search';
+// The map picker (client location) uses Google Maps. The key is a build setting (GitHub variable GOOGLE_MAPS_KEY -> VITE_GOOGLE_MAPS_KEY).
+// Without a key the build has no map (the rep pastes the numbers instead) and the policy below stays as strict as before. A Google Maps key
+// is meant to sit inside an app: it is restricted in Google Cloud to this app's address and to the two APIs it needs.
+const MAPS_JS = 'https://maps.googleapis.com/maps/api/js';
+const PLACES = 'https://places.googleapis.com/v1/places:searchText';
 
-function mapOrigins(env) {
-  const tiles = (env.VITE_MAP_TILES ?? TILES).trim();
-  const geocoder = (env.VITE_GEOCODER_URL ?? GEOCODER).trim();
-  const origin = (address) => {
-    if (!address) return '';
-    const url = new URL(address.replace(/\{[xyz]\}/g, '0'));
-    if (url.protocol !== 'https:') throw new Error('The map addresses must be https.');
-    return url.origin;
-  };
+function mapSettings(env) {
+  const key = (env.VITE_GOOGLE_MAPS_KEY ?? '').trim();
+  if (key && !/^[A-Za-z0-9_-]{20,80}$/.test(key)) throw new Error('VITE_GOOGLE_MAPS_KEY does not look like a Google Maps key.');
 
-  return { tiles, geocoder, tilesOrigin: origin(tiles), geocoderOrigin: origin(geocoder) };
+  return { key, js: key ? MAPS_JS : '', places: key ? PLACES : '' };
 }
 
-// The release build gets a strict Content-Security-Policy: only the app's own files run, nothing is loaded from the
-// internet, and data can be sent to the office server only (connect-src). The dev server does not get it (it needs a websocket).
+// The release build gets a strict Content-Security-Policy: only the app's own files run, almost nothing is loaded from the internet, and
+// data can be sent to the office server only (connect-src). With a Google Maps key it also allows what Google Maps needs (its own guide):
+// its scripts, pictures, fonts and the inline styles it adds itself. The dev server does not get a policy (it needs a websocket).
 function policy(origin, maps) {
+  const g = Boolean(maps.key);
+
   return [
     "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self'",
-    `img-src 'self' blob: data:${maps.tilesOrigin ? ` ${maps.tilesOrigin}` : ''}`,
-    "font-src 'self'",
-    `connect-src 'self'${origin ? ` ${origin}` : ''}${maps.geocoderOrigin ? ` ${maps.geocoderOrigin}` : ''}`,
+    `script-src 'self'${g ? ' https://maps.googleapis.com https://*.gstatic.com' : ''}`,
+    `style-src 'self'${g ? " 'unsafe-inline' https://fonts.googleapis.com" : ''}`,
+    `img-src 'self' blob: data:${g ? ' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com' : ''}`,
+    `font-src 'self'${g ? ' https://fonts.gstatic.com' : ''}`,
+    `connect-src 'self'${origin ? ` ${origin}` : ''}${g ? ' https://*.googleapis.com https://*.google.com https://*.gstatic.com' : ''}`,
+    ...(g ? ["worker-src blob:"] : []),
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",
@@ -52,11 +51,16 @@ function policy(origin, maps) {
 
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
-  const maps = mapOrigins(env);
+  const maps = mapSettings(env);
   const csp = command === 'build' ? policy(serverOrigin(env), maps) : null;
 
   return {
-    define: { __APP_VERSION__: JSON.stringify(version), __MAP_TILES__: JSON.stringify(maps.tiles), __GEOCODER_URL__: JSON.stringify(maps.geocoder) },
+    define: {
+      __APP_VERSION__: JSON.stringify(version),
+      __MAPS_KEY__: JSON.stringify(maps.key),
+      __MAPS_JS__: JSON.stringify(maps.js),
+      __PLACES_URL__: JSON.stringify(maps.places),
+    },
     build: { target: 'es2022', sourcemap: false },
     plugins: [
       {

@@ -781,7 +781,8 @@ a.btn { text-decoration: none; }
 .mp-pin svg { width: 34px; height: 34px; fill: var(--surface); }
 .mp-zooms { position: absolute; right: 10px; top: 10px; display: grid; gap: 6px; z-index: 500; }
 .mp-zoom { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); padding: 0; }
-.mp-credit { position: absolute; left: 8px; bottom: 6px; z-index: 500; margin: 0; padding: 2px 6px; border-radius: 8px; background: var(--surface); color: var(--mute); font: 600 10.5px/1.2 var(--font-ui); }
+.mp-view { font: 700 11px/1 var(--font-ui); }
+.mp-view[aria-pressed='true'] { background: var(--btn-bg); color: var(--btn-ink); }
 .mp-status { min-height: 2.6em; }
 .btn.is-off { opacity: 0.55; }
 
