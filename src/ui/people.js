@@ -208,7 +208,7 @@ export function openAddNumber(app, number) {
   const clientName = field('New client name', businessInput());
   const place = field('Place', placeInput());
   place.input.after(cityPicks(place.input));
-  const where = locationField(app);
+  const where = locationField(app, { getPlace: () => place.input.value });
   const person = field('Person\'s name', personInput({ maxLength: 100 }));
   const position = positionField(app, '');
 

@@ -90,3 +90,42 @@ export function createHttp({ base, fetchFn = (...args) => fetch(...args), timeou
     post: (path, body, options) => request('POST', path, { ...options, body }),
   };
 }
+
+// Search a place by name for the map picker (OpenStreetMap's Nominatim). Only the typed words leave the phone: no token, no cookies, no
+// identity. -> [{ name, lat, lng }], at most 6, India first. Throws SyncError('OFFLINE') when it cannot be reached.
+export async function searchPlaces(query, { base, fetchFn = (...args) => fetch(...args), timeoutMs = 12_000 } = {}) {
+  const text = String(query ?? '').replace(/[\u0000-\u001F\u007F<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 150);
+  if (text.length < 3 || !base) return [];
+
+  const url = assertSecureBase(base, false);
+  url.searchParams.set('q', text);
+  url.searchParams.set('format', 'jsonv2');
+  url.searchParams.set('limit', '6');
+  url.searchParams.set('countrycodes', 'in');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetchFn(url.toString(), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+      redirect: 'error',
+      credentials: 'omit',
+      cache: 'no-store',
+      referrerPolicy: 'strict-origin',
+    });
+    if (!response.ok) throw new Error('bad answer');
+
+    const rows = await response.json();
+    if (!Array.isArray(rows)) return [];
+
+    return rows.slice(0, 6).map((r) => ({ name: String(r.display_name ?? '').slice(0, 160), lat: Number(r.lat), lng: Number(r.lon) }))
+      .filter((r) => r.name && Number.isFinite(r.lat) && Number.isFinite(r.lng) && Math.abs(r.lat) <= 90 && Math.abs(r.lng) <= 180 && !(r.lat === 0 && r.lng === 0));
+  } catch {
+    throw new SyncError('OFFLINE', 'Could not search. Check the internet.');
+  } finally {
+    clearTimeout(timer);
+  }
+}

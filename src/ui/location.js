@@ -1,6 +1,7 @@
 import { SPOT_HELP, checkinLabel, checkinState, parseSpot } from '../core/geo.js';
 import { h, icon } from './dom.js';
 import { confirmDialog, slot, toast } from './kit.js';
+import { mapAvailable, openMapPicker } from './map-picker.js';
 
 // Where the rep is, read ONCE when a button is tapped (never in the background): the client's saved spot and the check-in selfie.
 // Android's own permission dialog cannot be themed, so the app explains first in its own dialog.
@@ -43,7 +44,7 @@ export async function takeSelfie(app) {
 // The exact location of a client, from Google Maps (required). The rep pastes the numbers of the spot (or a long link); only the two numbers
 // are kept. There is no "use my current location" here on purpose: a rep standing in the office could set every client from there.
 // A spot the manager has set on the website is the office's and shows read only. value: what to give store.saveClient.
-export function locationField(app, { existing = null } = {}) {
+export function locationField(app, { existing = null, getPlace = () => '' } = {}) {
   const locked = existing?.location_source === 'office' && existing.lat !== null && existing.lat !== undefined;
   let spot = existing && existing.lat !== null && existing.lat !== undefined ? { lat: existing.lat, lng: existing.lng } : null;
   let changed = false;
@@ -51,7 +52,8 @@ export function locationField(app, { existing = null } = {}) {
   const box = h('input', { class: 'input', type: 'text', autocomplete: 'off', spellcheck: 'false', maxLength: 800, placeholder: 'For example 26.9124, 75.7873', 'aria-label': 'Exact location from Google Maps', enterKeyHint: 'done' });
   const status = h('p', { class: 'muted small' });
   const help = h('p', { class: 'muted small' }, SPOT_HELP);
-  const field = slot(h('div', null, h('p', { class: 'eyebrow' }, 'Exact location (Google Maps)'), locked ? null : box, status, locked ? null : help), box);
+  const pick = h('button', { type: 'button', class: 'btn small-btn block' }, icon('pin', 18), 'Pick on the map');
+  const field = slot(h('div', null, h('p', { class: 'eyebrow' }, 'Exact location'), locked || !mapAvailable() ? null : pick, status, locked ? null : h('p', { class: 'muted small' }, 'Or paste it from Google Maps:'), locked ? null : box, locked ? null : help), box);
 
   const draw = (message = null) => {
     status.textContent = locked
@@ -69,6 +71,16 @@ export function locationField(app, { existing = null } = {}) {
     } else {
       draw(box.value.trim() ? 'These numbers could not be read. Paste the two numbers of the spot, or a long Google Maps link.' : null);
     }
+  });
+  pick.addEventListener('click', async () => {
+    const chosen = await openMapPicker(app, { start: spot, place: getPlace() });
+    if (!chosen) return;
+
+    spot = chosen;
+    changed = true;
+    box.value = '';
+    field.setError(null);
+    draw(`Picked on the map: ${chosen.lat.toFixed(5)}, ${chosen.lng.toFixed(5)}`);
   });
   draw();
 

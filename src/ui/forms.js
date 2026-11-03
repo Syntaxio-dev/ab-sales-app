@@ -213,7 +213,7 @@ export function openClientForm(app, existing = null) {
   const phone = phoneField('Main number (optional)', { value: existing?.phone ?? '', landline: true, hint: 'For example the office board number.' });
   const city = field('Place', placeInput({ placeholder: 'Town or city', value: existing?.city ?? '' }), 'Required. The team can filter clients by place.');
   city.input.after(cityPicks(city.input));
-  const where = locationField(app, { existing });
+  const where = locationField(app, { existing, getPlace: () => city.input.value });
   company.el.hidden = !existing?.company;
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 4, value: existing?.notes ?? '' }));
 

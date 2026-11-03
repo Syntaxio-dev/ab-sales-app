@@ -100,3 +100,9 @@ test('the native call-history reader only reads', () => {
   const java = readFileSync(new URL('../android/app/src/main/java/com/agarwalbrothers/sales/CallLogReaderPlugin.java', import.meta.url), 'utf8');
   assert.doesNotMatch(java, /\.insert\(|\.delete\(|\.update\(|WRITE_CALL_LOG|CALL_PHONE|READ_SMS/);
 });
+
+test('the map picker adds no network code of its own: the search is in http.js, the map addresses come from the build', () => {
+  assert.deepEqual(offenders(/\bfetch\s*\(/, { except: ['sync/http.js'] }), []);
+  assert.deepEqual(offenders(/https?:\/\/[^'"`]*(openstreetmap|nominatim|googleapis|mapbox)/i), [], 'map addresses are written in vite.config.js, not in the code');
+  assert.deepEqual(offenders(/__MAP_TILES__|__GEOCODER_URL__/, { except: ['config.js'] }), []);
+});

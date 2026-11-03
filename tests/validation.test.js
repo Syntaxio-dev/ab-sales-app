@@ -96,3 +96,30 @@ test('e-mail, quantity and control characters', () => {
   assert.notEqual(rules.optional('bad\u0000byte'), null);
   assert.notEqual(rules.required('bad\u001bescape'), null);
 });
+
+import { searchPlaces } from '../src/sync/http.js';
+
+test('the place search sends only the words, refuses odd answers and keeps valid places', async () => {
+  const calls = [];
+  const fake = (rows, ok = true) => async (url, init) => { calls.push({ url, init }); return { ok, json: async () => rows }; };
+  const base = 'https://geo.example/search';
+
+  assert.deepEqual(await searchPlaces('ab', { base, fetchFn: fake([]) }), [], 'too short: nothing is sent');
+  assert.equal(calls.length, 0);
+
+  const found = await searchPlaces('Jodhpur IIT <script>', {
+    base,
+    fetchFn: fake([{ display_name: 'IIT Jodhpur, Rajasthan', lat: '26.4719', lon: '73.1153' }, { display_name: 'Nowhere', lat: '0', lon: '0' }, { display_name: 'Bad', lat: '999', lon: '5' }, { lat: '1', lon: '1' }]),
+  });
+  assert.deepEqual(found, [{ name: 'IIT Jodhpur, Rajasthan', lat: 26.4719, lng: 73.1153 }]);
+  assert.equal(calls.length, 1, 'one search was sent');
+
+  const seen = [];
+  await searchPlaces('Jodhpur IIT <script>', { base, fetchFn: async (url, init) => { seen.push({ url, init }); return { ok: true, json: async () => [] }; } });
+  assert.match(seen[0].url, /q=Jodhpur\+IIT\+script/);
+  assert.equal(seen[0].init.credentials, 'omit');
+  assert.equal(seen[0].init.headers.Authorization, undefined, 'no token goes to the map search');
+
+  await assert.rejects(searchPlaces('Jodhpur', { base: 'http://geo.example/search', fetchFn: fake([]) }), /must start with https/);
+  await assert.rejects(searchPlaces('Jodhpur', { base, fetchFn: fake([], false) }), /Could not search/);
+});
