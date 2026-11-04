@@ -45,12 +45,12 @@ jobs:
             exit 1
           fi
         env:
-          SERVER_URL: ${{ vars.SERVER_URL || 'https://mediumpurple-rook-621617.hostingersite.com' }}
+          SERVER_URL: https://sales.agarwalbrothers.in
       # The address is not a secret: it is inside the app anyway. Only https is accepted (see vite.config.js).
-      # Default = the temporary Hostinger link; the repo variable SERVER_URL overrides it (use it when the real domain is live).
+      # The office is the Sales sub-domain. It is written here on purpose (not in a repo variable) so a stale variable can never point a release at a dead address; to change it, edit this file.
       - run: npm run build
         env:
-          VITE_SERVER_URL: ${{ vars.SERVER_URL || 'https://mediumpurple-rook-621617.hostingersite.com' }}
+          VITE_SERVER_URL: https://sales.agarwalbrothers.in
       - run: npx cap sync android
       - name: Restore signing key
         run: |
