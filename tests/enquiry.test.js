@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 
 import {
-  SOURCES, addBudget, askedBrands, askedProducts, byUrgency, daysAgo, frequentBrands, groupRupees, guideBrands, isSource, itemsSummary, lastVisit, needsAction, openEnquiriesOf,
-  recentClients, searchClients, shortMoney, sourceLabel, splitBrands, urgency,
+  OPEN, SOURCES, STATUSES, addBudget, askedBrands, askedProducts, byUrgency, daysAgo, frequentBrands, groupRupees, guideBrands, isSource, isStatus, itemsSummary, lastVisit, needsAction, openEnquiriesOf,
+  normalizeStatus, recentClients, searchClients, shortMoney, sourceLabel, splitBrands, urgency,
 } from '../src/core/enquiry.js';
 import { reportId } from '../src/core/ids.js';
 import { enquiriesWorked, figuresFor } from '../src/core/report.js';
@@ -37,7 +37,7 @@ async function phone({ code = 'REP001', persist = new MemoryPersist() } = {}) {
 const input = (extra = {}) => ({
   client_name: 'JK Cement',
   contact_name: 'Rohit Sharma',
-  status: 'new',
+  status: 'qualification',
   items: [
     { product: 'Muffle Furnace', brands: 'Labtech, Remi', quantity: 1, budget_paise: 15_000_000 },
     { product: 'Hot Air Oven', brands: '', quantity: 2 },
@@ -90,16 +90,16 @@ test('a status change and a note go into the timeline; closing clears the follow
   const { store } = await phone();
   const e = await store.saveEnquiry(input());
 
-  const sent = await store.saveEnquiry({ ...e, ...input(), id: e.id, status: 'price_sent', note: 'Mailed the quote' });
+  const sent = await store.saveEnquiry({ ...e, ...input(), id: e.id, status: 'proposal', note: 'Mailed the quote' });
   assert.equal(sent.timeline.length, 2);
-  assert.deepEqual([sent.timeline[1].status, sent.timeline[1].text], ['price_sent', 'Mailed the quote']);
+  assert.deepEqual([sent.timeline[1].status, sent.timeline[1].text], ['proposal', 'Mailed the quote']);
   assert.ok(sent.next_followup_at);
 
-  const noted = await store.saveEnquiry({ ...input(), id: e.id, status: 'price_sent', note: 'He will decide on Friday' });
+  const noted = await store.saveEnquiry({ ...input(), id: e.id, status: 'proposal', note: 'He will decide on Friday' });
   assert.equal(noted.timeline.length, 3);
   assert.equal(noted.timeline[2].status, null, 'a note alone is not a status change');
 
-  const same = await store.saveEnquiry({ ...input(), id: e.id, status: 'price_sent' });
+  const same = await store.saveEnquiry({ ...input(), id: e.id, status: 'proposal' });
   assert.equal(same.timeline.length, 3, 'saving with nothing new adds nothing');
 
   const won = await store.saveEnquiry({ ...input(), id: e.id, status: 'won' });
@@ -126,15 +126,15 @@ test('overdue, due today and untouched enquiries need action; the most urgent co
   const now = new Date();
   const at = (extra) => ({ opened_at: iso(-10 * 86_400_000), updated_at: iso(-1000), ...extra });
 
-  const overdue = at({ status: 'callback', next_followup_at: iso(-3_600_000) });
-  const later = at({ status: 'price_sent', next_followup_at: iso(5 * 86_400_000) });
-  const idle = at({ status: 'new', next_followup_at: null, updated_at: iso(-4 * 86_400_000) });
-  const fresh = at({ status: 'new', next_followup_at: null, updated_at: iso(-3_600_000) });
+  const overdue = at({ status: 'need_analysis', next_followup_at: iso(-3_600_000) });
+  const later = at({ status: 'proposal', next_followup_at: iso(5 * 86_400_000) });
+  const idle = at({ status: 'qualification', next_followup_at: null, updated_at: iso(-4 * 86_400_000) });
+  const fresh = at({ status: 'qualification', next_followup_at: null, updated_at: iso(-3_600_000) });
   const closed = at({ status: 'won', next_followup_at: null, updated_at: iso(-9 * 86_400_000) });
 
   assert.equal(urgency(overdue, now), 'overdue');
   assert.equal(urgency(later, now), 'planned');
-  const laterToday = at({ status: 'callback', next_followup_at: new Date(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).getTime() - 1).toISOString() });
+  const laterToday = at({ status: 'need_analysis', next_followup_at: new Date(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).getTime() - 1).toISOString() });
   assert.equal(urgency(laterToday, now), now.getHours() === 23 && now.getMinutes() > 58 ? 'overdue' : 'today');
   assert.equal(urgency(idle, now), 'idle');
   assert.equal(urgency(fresh, now), 'none');
@@ -158,14 +158,14 @@ test('an enquiry reaches the office, changes with every update, and comes back o
   assert.equal(a.store.unsyncedCount, 0);
 
   await new Promise((r) => setTimeout(r, 5));
-  await a.store.saveEnquiry({ ...input(), id: e.id, status: 'price_sent', note: 'Mailed' });
+  await a.store.saveEnquiry({ ...input(), id: e.id, status: 'proposal', note: 'Mailed' });
   await a.engine.syncNow();
-  assert.equal(office.rows.enquiries.get(e.id).data.status, 'price_sent');
+  assert.equal(office.rows.enquiries.get(e.id).data.status, 'proposal');
 
   const again = await phone({ code: 'REP001' });
   await again.engine.syncNow();
   const back = again.store.enquiryById(e.id);
-  assert.equal(back.status, 'price_sent');
+  assert.equal(back.status, 'proposal');
   assert.equal(back.items.length, 2);
   assert.equal(back.timeline.length, 2);
 
@@ -185,7 +185,7 @@ test('another rep never sees my enquiries', async () => {
 });
 
 test('what the office sends for an enquiry is checked like everything else', () => {
-  const good = { uuid: crypto.randomUUID(), client_name: 'JK', status: 'new', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(0), updated_at: iso(0), timeline: [] };
+  const good = { uuid: crypto.randomUUID(), client_name: 'JK', status: 'qualification', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(0), updated_at: iso(0), timeline: [] };
 
   assert.ok(cleanEnquiry(good));
   assert.equal(cleanEnquiry({ ...good, status: 'weird' }), null);
@@ -330,7 +330,7 @@ test('source: sent with the enquiry (null when there is none), comes back on a n
 });
 
 test('source: what the office sends is checked; a missing field is none', () => {
-  const good = { uuid: crypto.randomUUID(), client_name: 'JK', status: 'new', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(0), updated_at: iso(0), timeline: [] };
+  const good = { uuid: crypto.randomUUID(), client_name: 'JK', status: 'qualification', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(0), updated_at: iso(0), timeline: [] };
 
   assert.equal(cleanEnquiry(good).source, null);
   assert.equal(cleanEnquiry({ ...good, source: 'whatsapp' }).source, 'whatsapp');
@@ -341,7 +341,7 @@ test('source: what the office sends is checked; a missing field is none', () => 
 
 test('source: an enquiry stored before the field existed loads with none', async () => {
   const { store } = await phone();
-  const old = cleanEnquiry({ uuid: crypto.randomUUID(), client_name: 'Old Co', status: 'new', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(-86_400_000), updated_at: iso(-86_400_000), timeline: [] });
+  const old = cleanEnquiry({ uuid: crypto.randomUUID(), client_name: 'Old Co', status: 'qualification', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(-86_400_000), updated_at: iso(-86_400_000), timeline: [] });
   delete old.source;
 
   await store.putFromServer('enquiry', old);
@@ -352,7 +352,7 @@ test('source: an enquiry stored before the field existed loads with none', async
 
 const when = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
 const client = (n, name, city = '') => ({ id: `c${n}`, name, city });
-const enq = (client_id, days, items, status = 'new', id = crypto.randomUUID()) => ({ id, client_id, status, items, opened_at: when(days), updated_at: when(days) });
+const enq = (client_id, days, items, status = 'qualification', id = crypto.randomUUID()) => ({ id, client_id, status, items, opened_at: when(days), updated_at: when(days) });
 const item = (product, brands = '') => ({ product, brands, quantity: 1 });
 
 test('recent clients: newest first, once each, only ones that still exist, at most five', () => {
@@ -416,10 +416,10 @@ test('asked brands for a product, and the guide brands of the same product', () 
 
 test('open enquiries of a client: only open ones, newest first, not the one being edited', () => {
   const enquiries = [
-    enq('c1', 5, [item('A')], 'new', 'old'),
-    enq('c1', 1, [item('B')], 'price_sent', 'new'),
+    enq('c1', 5, [item('A')], 'qualification', 'old'),
+    enq('c1', 1, [item('B')], 'proposal', 'new'),
     enq('c1', 2, [item('C')], 'won', 'closed'),
-    enq('c2', 0, [item('D')], 'new', 'other'),
+    enq('c2', 0, [item('D')], 'qualification', 'other'),
   ];
 
   assert.deepEqual(openEnquiriesOf(enquiries, 'c1').map((e) => e.id), ['new', 'old']);
@@ -472,4 +472,22 @@ test('frequent brands: the ones the rep writes most, over all products, even bef
   assert.deepEqual([...got].sort(), ['Labtech', 'Local', 'Remi']);
   assert.equal(frequentBrands(enquiries, 2).length, 2);
   assert.deepEqual(frequentBrands([]), []);
+});
+
+test('the six stages, and the stages of older versions still mean one of them (stored data, office, timeline)', async () => {
+  assert.deepEqual(STATUSES.map((s) => s.label), ['Qualification', 'Need Analysis', 'Proposal / Price Quote', 'Negotiation / Review', 'Closed Won', 'Closed Lost']);
+  assert.deepEqual(OPEN, ['qualification', 'need_analysis', 'proposal', 'negotiation']);
+
+  const legacy = { new: 'qualification', callback: 'qualification', meeting_planned: 'need_analysis', price_to_send: 'proposal', price_sent: 'proposal' };
+  for (const [old, now] of Object.entries(legacy)) assert.equal(normalizeStatus(old), now);
+  assert.equal(normalizeStatus('won'), 'won');
+  assert.equal(isStatus('new'), false, 'a rep can only save today\'s stages');
+
+  // an office that still sends the old names (and a timeline written with them)
+  const good = { uuid: crypto.randomUUID(), client_name: 'JK', status: 'price_sent', items: [{ product: 'Oven', quantity: 1 }], opened_at: iso(0), updated_at: iso(0),
+    timeline: [{ at: iso(0), text: 'Opened', status: 'new' }, { at: iso(0), text: 'Sent', status: 'price_sent' }] };
+  const clean = cleanEnquiry(good);
+  assert.equal(clean.status, 'proposal');
+  assert.deepEqual(clean.timeline.map((t) => t.status), ['qualification', 'proposal']);
+  assert.equal(cleanEnquiry({ ...good, status: 'weird' }), null);
 });

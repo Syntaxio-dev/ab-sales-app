@@ -41,6 +41,29 @@ export async function createWebPlatform() {
       },
     },
 
+    // The browser has no local notifications. For looking at the screens only, a test page may set
+    // globalThis.__AB_FAKE_NOTIFY__ = { permission: 'granted' | 'denied' | 'prompt', scheduled: [] }; schedule() then fills .scheduled.
+    reminders: {
+      get available() {
+        return Boolean(globalThis.__AB_FAKE_NOTIFY__);
+      },
+      async permission() {
+        return globalThis.__AB_FAKE_NOTIFY__?.permission ?? 'denied';
+      },
+      async request() {
+        const fake = globalThis.__AB_FAKE_NOTIFY__;
+        if (fake && fake.permission === 'prompt') fake.permission = fake.allow === false ? 'denied' : 'granted';
+        return fake?.permission === 'granted' ? 'granted' : 'denied';
+      },
+      async schedule(list) {
+        if (globalThis.__AB_FAKE_NOTIFY__) globalThis.__AB_FAKE_NOTIFY__.scheduled = list;
+      },
+      async cancelAll() {
+        if (globalThis.__AB_FAKE_NOTIFY__) globalThis.__AB_FAKE_NOTIFY__.scheduled = [];
+      },
+      onTap() {},
+    },
+
     // For looking at the screens only: a test page may set globalThis.__AB_FAKE_LOCATION__ = { lat, lng, accuracy_m } (or { error: 'DENIED' }).
     async locate() {
       const fake = globalThis.__AB_FAKE_LOCATION__;

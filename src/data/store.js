@@ -2,6 +2,7 @@ import * as rules from '../core/rules.js';
 import { normalizePhone } from '../core/phone.js';
 import * as enquiryRules from '../core/enquiry.js';
 import * as meetingRules from '../core/meeting.js';
+import * as leadRules from '../core/lead.js';
 import * as geo from '../core/geo.js';
 import { CLIENT_TYPE_IDS, withGuideDefaults } from '../core/guide.js';
 import { PRESET_POSITIONS, cleanPosition, positionKey } from '../core/positions.js';
@@ -42,7 +43,8 @@ const DEFAULTS = {
   meeting: { client_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, status: 'done', scheduled_at: null, ended_at: null, route_id: null, result: null, moved_from: null, time_manual: false, checkin_at: null, checkin_lat: null, checkin_lng: null, checkin_accuracy_m: null, checkin_distance_m: null, has_selfie: false, selfie_synced: false, synced: false, sync_error: null },
   route: { rep_id: null, date: '', title: '', area: '', start_time: '09:00', overnight: false, stops_order: [], synced: false, sync_error: null },
   call: { direction: 'outgoing', number: '', client_id: null, contact_id: null, client_name: '', contact_name: '', duration_seconds: 0, synced: false, sync_error: null },
-  enquiry: { client_id: null, client_name: '', contact_id: null, contact_name: '', status: 'new', source: null, items: [], next_followup_at: null, closed_at: null, timeline: [], synced: false, sync_error: null },
+  // lead_status / lead_remark / last_followup_at: the follow-up layer (v1.15); null status = an enquiry from before it, read as "New lead"
+  enquiry: { client_id: null, client_name: '', contact_id: null, contact_name: '', status: 'qualification', source: null, lead_status: null, lead_remark: '', last_followup_at: null, items: [], next_followup_at: null, closed_at: null, timeline: [], synced: false, sync_error: null },
   report: { notes: '', tomorrow_plan: '', issues: '', figures: {}, submitted_at: null, synced: false, sync_error: null },
   // a rep's request to the manager: "please add / correct this in the product guide"
   note: { product_id: null, product_name: '', body: '', synced: false, sync_error: null },
@@ -57,7 +59,7 @@ const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up furthe
 // bookkeeping the same record can then never be overwritten by an older copy (two writes finishing in the wrong order).
 const MUTATORS = [
   'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveContact', 'deleteContact', 'saveMeeting', 'deleteMeeting', 'saveRoute', 'deleteRoute',
-  'saveEnquiry', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
+  'saveEnquiry', 'saveLeadFollowup', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
   'saveNote', 'setGuideFromServer', 'saveScript', 'deleteScript', 'tickGuideQuestion', 'resetGuideTicks', 'setGuideLearned', 'setGuideClientType',
   'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced', 'markSelfieSynced', 'saveSelfieFromServer',
   'putFromServer', 'removeFromServer', 'pruneAbsent', 'saveBillFromServer', 'wipeEverything',
@@ -134,7 +136,7 @@ export class Store {
     for (const kind of KINDS) {
       for (const slot of await persist.keys(PREFIX[kind])) {
         const record = await store.#read(slot);
-        if (record?.id) store.#map(kind).set(record.id, { ...DEFAULTS[kind], ...record });
+        if (record?.id) store.#map(kind).set(record.id, { ...DEFAULTS[kind], ...(kind === 'enquiry' ? enquiryRules.normalizeEnquiry(record) : record) });
       }
     }
     store.#profile = await store.#read(PROFILE_KEY);
@@ -576,7 +578,10 @@ export class Store {
       budget_paise: i?.budget_paise === undefined || i?.budget_paise === null || i?.budget_paise === '' ? null : Number(i.budget_paise),
     }));
     const note = String(input.note ?? '').trim();
-    const followup = input.next_followup_at ? Date.parse(input.next_followup_at) : null;
+    // a follow-up date that is not given: an edit keeps what is stored, a new enquiry gets the first reminder (tomorrow 10 am) so it is never born unremembered
+    const before = input.id ? this.#enquiries.get(input.id) : undefined;
+    const followupIso = input.next_followup_at !== undefined ? input.next_followup_at : before ? before.next_followup_at : leadRules.suggestedReminder('new')?.toISOString() ?? null;
+    const followup = followupIso ? Date.parse(followupIso) : null;
 
     check(
       rules.required(input.client_name, { min: 2, max: 150, label: 'Client name' }),
@@ -613,6 +618,7 @@ export class Store {
       contact_name: String(input.contact_name ?? '').trim(),
       status: input.status,
       source: input.source === undefined ? (old?.source ?? null) : input.source,
+      ...this.#leadFields(old, input.status),
       items,
       opened_at: old?.opened_at ?? now,
       next_followup_at: closed || followup === null ? null : new Date(followup).toISOString(),
@@ -626,6 +632,64 @@ export class Store {
 
     await this.#write(PREFIX.enquiry + id, record);
     this.#enquiries.set(id, record);
+    this.#changed();
+    return record;
+  }
+
+  // The follow-up layer of an enquiry saved through the enquiry form: a new one is a "New lead"; finishing it (Closed Won / Lost) is
+  // "Deal done" / "Deal lost"; opening a finished one again is a "New lead"; the rest is kept as it is.
+  #leadFields(old, stage) {
+    let status = old ? (old.lead_status ?? null) : 'new';
+    const finishing = stage === 'won' ? 'deal_done' : stage === 'lost' ? 'deal_lost' : null;
+    if (finishing) status = finishing;
+    else if (status === 'deal_done' || status === 'deal_lost') status = 'new';
+    return { lead_status: status, lead_remark: old?.lead_remark ?? '', last_followup_at: old?.last_followup_at ?? null };
+  }
+
+  /**
+   * One follow-up of a lead (an enquiry): input { id, lead_status, remark, next_followup_at (ISO), no_reminder }.
+   * Deal done / Deal lost finish the enquiry (stage Closed Won / Closed Lost, no reminder). Any other status needs the next reminder
+   * (or no_reminder: true, said on purpose) so a lead is never forgotten. The remark is what the client said; the timeline keeps each one.
+   * (A queued method: it must not call another queued method, so it writes the record itself.)
+   */
+  async saveLeadFollowup(input) {
+    const old = this.#enquiries.get(input.id);
+    if (!old) throw new ValidationError('This enquiry is not on the phone any more.');
+
+    const status = input.lead_status;
+    const remark = String(input.remark ?? '').trim();
+    const closes = leadRules.closesTo(status);
+    const followup = closes || !input.next_followup_at ? null : Date.parse(input.next_followup_at);
+    const finished = enquiryRules.CLOSED.includes(old.status);
+
+    check(
+      leadRules.isLeadStatus(status) ? null : 'Pick the follow-up status.',
+      rules.optional(remark, { max: leadRules.MAX_REMARK, label: 'Remark' }),
+      finished && !closes ? 'This enquiry is finished. Open it again before a new follow-up.' : null,
+      !closes && followup === null && !input.no_reminder ? 'Set the next reminder, so this lead is not forgotten.' : null,
+      followup !== null && Number.isNaN(followup) ? 'Pick a valid reminder time.' : null,
+      followup !== null && followup < Date.now() - 60_000 ? 'Pick a reminder from now on.' : null,
+      followup !== null && followup > Date.now() + TWO_YEARS ? 'A reminder can be at most 2 years ahead.' : null,
+    );
+
+    const now = nowIso();
+    const stage = closes ?? old.status;
+    const record = {
+      ...old,
+      status: stage,
+      lead_status: status,
+      lead_remark: remark,
+      last_followup_at: now,
+      next_followup_at: closes || followup === null ? null : new Date(followup).toISOString(),
+      closed_at: closes ? (finished && old.closed_at ? old.closed_at : now) : null,
+      timeline: [...old.timeline, { at: now, text: leadRules.leadLine(status, remark), status: stage }].slice(-enquiryRules.MAX_TIMELINE),
+      synced: false,
+      sync_error: null,
+      updated_at: now,
+    };
+
+    await this.#write(PREFIX.enquiry + record.id, record);
+    this.#enquiries.set(record.id, record);
     this.#changed();
     return record;
   }
@@ -1254,7 +1318,7 @@ export class Store {
 
   // A record that came FROM the office (already checked by src/sync/merge.js): stored as "sent".
   async putFromServer(kind, record, bill = null) {
-    await this.#put(kind, { ...DEFAULTS[kind], ...record, synced: true, sync_error: null });
+    await this.#put(kind, { ...DEFAULTS[kind], ...(kind === 'enquiry' ? enquiryRules.normalizeEnquiry(record) : record), synced: true, sync_error: null });
     if (bill) await this.#writeBytes(PREFIX.bill + record.id, bill);
   }
 

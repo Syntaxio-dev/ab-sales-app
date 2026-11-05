@@ -27,7 +27,7 @@ import { applyTheme, watchSystemTheme } from './ui/theme.js';
 import { resetCallsView } from './ui/calls.js';
 import { renderGuide, resetGuideView } from './ui/guide.js';
 import { installSelectSheets } from './ui/sheets.js';
-import { renderEnquiries, resetEnquiryView } from './ui/enquiries.js';
+import { renderLeads, resetLeadView } from './ui/leads.js';
 import { renderMeetings } from './ui/meetings.js';
 import { renderClients, renderExpenses, renderHome, resetTabViews } from './ui/tabs.js';
 
@@ -39,7 +39,8 @@ installSelectSheets();
 // The order of the dock, and of the swipe: swipe left = the next tab, swipe right = the previous one.
 const TABS = [
   { id: 'home', label: 'Home', icon: 'home', render: renderHome },
-  { id: 'enquiries', label: 'Enquiries', icon: 'clipboard', render: renderEnquiries },
+  // the tab keeps the id 'enquiries' (the badge, goTab and the swipe order use it); since v1.15 it is the Leads tab
+  { id: 'enquiries', label: 'Leads', icon: 'phone', render: renderLeads },
   { id: 'clients', label: 'Clients', icon: 'users', render: renderClients },
   { id: 'guide', label: 'Guide', icon: 'book', render: renderGuide },
   { id: 'meetings', label: 'Meetings', icon: 'calendar', render: renderMeetings },
@@ -83,6 +84,8 @@ async function boot() {
   const app = new App({ vault: new Vault(platform.secrets), persist: platform.persist, platform, syncFactory: link?.syncFactory ?? null, officeLogin: link?.login ?? null, officeLogout: link?.logout ?? null });
 
   let tab = 'home';
+  let openLeadsFirst = false;   // a reminder was tapped while locked: open the Leads tab after the PIN
+  let goTabNow = null;          // changes the tab of the open shell (null while locked)
   let leaveScreen = () => {};
   let unsubscribeStore = () => {};
   let cleanups = []; // what the current tab screen subscribed to; run before it is drawn again
@@ -96,13 +99,14 @@ async function boot() {
   }
 
   function show(phase) {
+    goTabNow = null;
     leaveScreen();
     leaveScreen = () => {};
     unsubscribeStore();
     unsubscribeStore = () => {};
     runCleanups();
     resetTabViews();
-    resetEnquiryView();
+    resetLeadView();
     resetCallsView();
     resetGuideView();
     closeAll(); // no form or dialog may stay on screen while locked
@@ -115,7 +119,8 @@ async function boot() {
     if (phase === 'setup') renderSignIn(screen, app);
     else if (phase === 'locked') leaveScreen = renderLock(screen, app) ?? (() => {});
     else if (phase === 'unlocked') {
-      tab = 'home';
+      tab = openLeadsFirst ? 'enquiries' : 'home'; // the rep tapped a follow-up reminder while the app was locked
+      openLeadsFirst = false;
       renderShell(screen);
     }
   }
@@ -138,6 +143,8 @@ async function boot() {
       ].filter(Boolean) : [])),
       onCleanup: (fn) => cleanups.push(fn),
     };
+
+    goTabNow = ctx.goTab;
 
     // animate: the screen fades up (only when the person changes tab, not when a saved record redraws the list)
     function draw(animate, direction = null) {
@@ -216,6 +223,11 @@ async function boot() {
 
   // ---- lock when the app was away for a while, and the phone's back button --------------
 
+  // the rep tapped a follow-up reminder: the Leads tab (after the PIN, when the app was locked)
+  platform.reminders?.onTap?.(() => {
+    if (app.phase === 'unlocked' && goTabNow) goTabNow('enquiries');
+    else openLeadsFirst = true;
+  });
   platform.onAppState((active) => (active ? app.backInForeground() : app.goneToBackground()));
   window.addEventListener('online', () => app.sync?.schedule(1500)); // the network is back: send what is waiting
   platform.onBackButton(() => {

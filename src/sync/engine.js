@@ -59,6 +59,8 @@ const wireOf = {
     uuid: r.id, client_uuid: r.client_id, client_name: r.client_name, contact_uuid: r.contact_id, contact_name: r.contact_name, status: r.status,
     items: r.items, opened_at: r.opened_at, next_followup_at: r.next_followup_at, closed_at: r.closed_at, timeline: r.timeline, updated_at: r.updated_at,
     source: r.source ?? null, // null is sent too: that is how a cleared "came through" reaches the office (an office that does not know the field ignores it)
+    // the follow-up layer (v1.15), sent the same way: null / '' travel too, an office that does not know the fields ignores them
+    lead_status: r.lead_status ?? null, lead_remark: r.lead_remark || null, last_followup_at: r.last_followup_at ?? null,
   }),
   report: (r) => ({
     uuid: r.id, report_date: r.report_date, notes: r.notes, tomorrow_plan: r.tomorrow_plan, issues: r.issues, figures: r.figures,
@@ -513,6 +515,8 @@ export class SyncEngine {
     if (kind === 'client' && !('lat' in incoming) && local?.lat !== null && local?.lat !== undefined) cleaned = { ...cleaned, lat: local.lat, lng: local.lng, location_accuracy_m: local.location_accuracy_m, location_at: local.location_at, location_source: local.location_source };
     // an office that does not know "came through" yet sends no such key: it must not wipe what the rep chose (null sent on purpose does)
     if (kind === 'enquiry' && !('source' in incoming) && local?.source) cleaned = { ...cleaned, source: local.source };
+    // the same for the follow-up layer: an office from before v1.15 sends none of these keys and must not wipe the rep's status, remark or last contact
+    if (kind === 'enquiry' && !('lead_status' in incoming) && local) cleaned = { ...cleaned, lead_status: local.lead_status ?? null, lead_remark: local.lead_remark ?? '', last_followup_at: local.last_followup_at ?? null };
     await this.#store.putFromServer(kind, cleaned);
     return true;
   }

@@ -2,18 +2,43 @@
 // stage names (docs/sales-api.md in the website project).
 
 export const STATUSES = [
-  { value: 'new', label: 'New' },
-  { value: 'price_to_send', label: 'Price to send' },
-  { value: 'price_sent', label: 'Price sent' },
-  { value: 'callback', label: 'Call back' },
-  { value: 'meeting_planned', label: 'Meeting planned' },
-  { value: 'negotiation', label: 'Negotiation' },
-  { value: 'won', label: 'Order received' },
-  { value: 'lost', label: 'Lost' },
+  { value: 'qualification', label: 'Qualification' },
+  { value: 'need_analysis', label: 'Need Analysis' },
+  { value: 'proposal', label: 'Proposal / Price Quote' },
+  { value: 'negotiation', label: 'Negotiation / Review' },
+  { value: 'won', label: 'Closed Won' },
+  { value: 'lost', label: 'Closed Lost' },
 ];
 
-export const OPEN = ['new', 'price_to_send', 'price_sent', 'callback', 'meeting_planned', 'negotiation'];
+export const OPEN = ['qualification', 'need_analysis', 'proposal', 'negotiation'];
 export const CLOSED = ['won', 'lost'];
+
+// The stages before v1.15 (still stored on phones and still sent by an older office or phone): each one now means one of the six.
+export const LEGACY_STATUS = {
+  new: 'qualification',
+  callback: 'qualification',
+  meeting_planned: 'need_analysis',
+  price_to_send: 'proposal',
+  price_sent: 'proposal',
+};
+
+export const normalizeStatus = (status) => LEGACY_STATUS[status] ?? status;
+
+// A stored or received enquiry in today's stage names (its timeline too). Anything else is left as it is.
+export function normalizeEnquiry(record) {
+  if (!record || typeof record !== 'object') return record;
+  const status = normalizeStatus(record.status);
+  let changed = status !== record.status;
+  const timeline = Array.isArray(record.timeline)
+    ? record.timeline.map((t) => {
+      const next = t && t.status ? LEGACY_STATUS[t.status] : null;
+      if (!next) return t;
+      changed = true;
+      return { ...t, status: next };
+    })
+    : record.timeline;
+  return changed ? { ...record, status, timeline } : record;
+}
 
 export const MAX_ITEMS = 10;
 export const MAX_TIMELINE = 100;

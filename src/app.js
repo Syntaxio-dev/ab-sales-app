@@ -1,4 +1,5 @@
 import { LOOKBACK_DAYS, MAX_ROWS, matchCalls } from './calls/matcher.js';
+import { planKey, planReminders } from './core/reminders.js';
 import * as rules from './core/rules.js';
 import { Store, ValidationError } from './data/store.js';
 
@@ -25,6 +26,8 @@ export class App {
   // stored, never sent, gone when the app locks.
   unknownCalls = [];
   #callsBusy = false;
+  #stopReminders = null;
+  #lastPlan = null;
 
   constructor({ vault, persist, platform, syncFactory = null, officeLogin = null, officeLogout = null, autoLockMs = AUTO_LOCK_MS, clock = () => Date.now() }) {
     this.syncFactory = syncFactory;
@@ -139,6 +142,7 @@ export class App {
     const store = this.store;
     this.store = null;
     this.#stopSync();
+    await this.platform.reminders?.cancelAll?.().catch(() => {});
     await store?.close();
     await this.persist.clear();
     await this.vault.erase();
@@ -241,6 +245,8 @@ export class App {
     await engine?.whenIdle();
     await engine?.signOut();
     await store.wipeEverything();
+    await this.platform.reminders?.cancelAll?.().catch(() => {});
+    this.#lastPlan = null;
     this.unknownCalls = [];
     this.#startSync();
   }
@@ -248,10 +254,88 @@ export class App {
   #startSync() {
     this.sync = this.syncFactory ? this.syncFactory(this.store) : null;
     this.sync?.start();
+    this.#watchReminders();
   }
 
   #stopSync() {
     this.sync?.stop();
     this.sync = null;
+    this.#stopReminders?.();
+    this.#stopReminders = null;
+  }
+
+  // ---- follow-up reminders (Leads) -----------------------------------------------------------------------------------------
+
+  // 'unavailable' (a browser) | 'unset' (never asked) | 'off' (the rep turned it off) | 'denied' (Android says no) | 'on'
+  async reminderState() {
+    const r = this.platform.reminders;
+    if (!r?.available || !this.store) return 'unavailable';
+
+    const pref = this.store.prefs.reminders;
+    if (pref === undefined) return 'unset';
+    if (pref !== true) return 'off';
+    return (await r.permission().catch(() => 'denied')) === 'granted' ? 'on' : 'denied';
+  }
+
+  // The rep agreed (the screen explained it) and Android asks for the notification permission. -> 'on' | 'denied'
+  async enableReminders() {
+    const r = this.platform.reminders;
+    if (!r?.available || !this.store) return 'unavailable';
+
+    this.suspendAutoLock = true; // Android's permission dialog puts this app in the background for a moment
+    try {
+      if ((await r.request().catch(() => 'denied')) !== 'granted') {
+        await this.store.savePrefs({ reminders: false });
+        return 'denied';
+      }
+    } finally {
+      this.suspendAutoLock = false;
+    }
+
+    await this.store.savePrefs({ reminders: true });
+    this.#lastPlan = null;
+    await this.refreshReminders();
+    return 'on';
+  }
+
+  async disableReminders() {
+    await this.store?.savePrefs({ reminders: false });
+    await this.platform.reminders?.cancelAll?.().catch(() => {});
+    this.#lastPlan = null;
+  }
+
+  // Tells the phone which reminders to hold (it replaces the old ones). Only when something changed since the last time.
+  async refreshReminders() {
+    const r = this.platform.reminders;
+    const store = this.store;
+    if (!r?.available || !store || store.prefs.reminders !== true) return false;
+    if ((await r.permission().catch(() => 'denied')) !== 'granted') return false;
+
+    const plan = planReminders(store.enquiries, this.clock());
+    const key = planKey(plan);
+    if (key === this.#lastPlan) return true;
+
+    await r.schedule(plan);
+    this.#lastPlan = key;
+    return true;
+  }
+
+  // the leads change (a save, a sync): a moment later the phone is told, once
+  #watchReminders() {
+    this.#stopReminders?.();
+    const store = this.store;
+    if (!store || !this.platform.reminders?.available) return;
+
+    let timer = null;
+    const soon = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void this.refreshReminders().catch(() => {}), 600);
+    };
+    const off = store.subscribe(soon);
+    this.#stopReminders = () => {
+      clearTimeout(timer);
+      off();
+    };
+    soon();
   }
 }

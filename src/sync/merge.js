@@ -1,6 +1,7 @@
 import { normalizePhone } from '../core/phone.js';
 import { CLIENT_TYPE_IDS } from '../core/guide.js';
-import { isSource } from '../core/enquiry.js';
+import { isSource, normalizeEnquiry } from '../core/enquiry.js';
+import { isLeadStatus, MAX_REMARK } from '../core/lead.js';
 import { RESULTS, STATUSES as MEETING_STATUSES, validStartTime } from '../core/meeting.js';
 import * as rules from '../core/rules.js';
 import * as geo from '../core/geo.js';
@@ -94,10 +95,11 @@ export function cleanClient(r) {
   };
 }
 
-const ENQUIRY_STATUSES = ['new', 'price_to_send', 'price_sent', 'callback', 'meeting_planned', 'negotiation', 'won', 'lost'];
+const ENQUIRY_STATUSES = ['qualification', 'need_analysis', 'proposal', 'negotiation', 'won', 'lost'];
 
-export function cleanEnquiry(r) {
-  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+export function cleanEnquiry(raw) {
+  if (!raw || typeof raw.uuid !== 'string' || !UUID.test(raw.uuid)) return null;
+  const r = normalizeEnquiry(raw); // an office that still speaks the old stage names
 
   const updated = moment(r.updated_at);
   const opened = moment(r.opened_at);
@@ -124,6 +126,9 @@ export function cleanEnquiry(r) {
     contact_name: text(r.contact_name, 150),
     status: r.status,
     source: isSource(r.source) ? r.source : null, // an office that does not know the field sends none
+    lead_status: isLeadStatus(r.lead_status) ? r.lead_status : null,
+    lead_remark: text(r.lead_remark, MAX_REMARK),
+    last_followup_at: r.last_followup_at ? moment(r.last_followup_at) : null,
     items,
     opened_at: opened,
     next_followup_at: r.next_followup_at ? moment(r.next_followup_at) : null,

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Hardened for a private app that talks to one office server only:
          - allowBackup off + data extraction rules: nothing is copied to Google Drive, another phone or by adb backup
@@ -16,6 +16,12 @@
          (no ACCESS_BACKGROUND_LOCATION). Asked at run time, after the app has explained why. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Follow-up reminders (Leads): the phone itself shows "a follow-up is due" at the time the rep set (local notifications, no server, no
+         client name on the lock screen). Android 13+ asks at run time, after the app has explained why. The local-notifications plugin also
+         adds RECEIVE_BOOT_COMPLETED (set the reminders again after a restart) and WAKE_LOCK. We remove its SCHEDULE_EXACT_ALARM: the
+         reminders may come a few minutes late instead of the app asking for the exact-alarm right. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
 
     <application
         android:allowBackup="false"

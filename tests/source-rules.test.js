@@ -90,10 +90,15 @@ test('call matching is opt-in: nothing is read unless the person turned it on', 
   assert.match(app, /prefs\.call_matching !== true/);
 });
 
-test('the manifest asks for the internet and the call history, nothing else of its own', () => {
+test('the manifest asks for the internet, the call history, the location (once per tap) and notifications (reminders), nothing else of its own', () => {
   const manifest = readFileSync(new URL('../android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
-  const permissions = [...manifest.matchAll(/<uses-permission android:name="([^"]+)"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(permissions, ['android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION', 'android.permission.INTERNET', 'android.permission.READ_CALL_LOG']);
+  const tags = [...manifest.matchAll(/<uses-permission\b[^>]*>/g)].map((m) => m[0]);
+  const asked = tags.filter((t) => !/tools:node="remove"/.test(t)).map((t) => /android:name="([^"]+)"/.exec(t)[1]).sort();
+  assert.deepEqual(asked, ['android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION', 'android.permission.INTERNET', 'android.permission.POST_NOTIFICATIONS', 'android.permission.READ_CALL_LOG']);
+
+  // the local-notifications plugin would add the exact-alarm right: we remove it (a reminder may come a few minutes late instead)
+  assert.ok(tags.some((t) => /SCHEDULE_EXACT_ALARM/.test(t) && /tools:node="remove"/.test(t)), 'SCHEDULE_EXACT_ALARM is removed');
+  assert.doesNotMatch(manifest, /ACCESS_BACKGROUND_LOCATION|USE_EXACT_ALARM/);
 });
 
 test('the native call-history reader only reads', () => {

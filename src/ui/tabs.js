@@ -1,6 +1,6 @@
 import { BILL_TYPE_LABELS, categoryLabel } from '../core/rules.js';
 import { openClientPage } from './clients.js';
-import { needsActionCard } from './enquiries.js';
+import { needsActionCard } from './leads.js';
 import { reportCard } from './report.js';
 import { h, icon, svg } from './dom.js';
 import { openClientForm, openExpenseForm } from './forms.js';

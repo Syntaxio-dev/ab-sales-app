@@ -6,6 +6,7 @@ import { h, icon } from './dom.js';
 import { allJson, clientsCsv, expensesCsv, meetingsCsv } from './export.js';
 import { confirmDialog, dialog, openPage, toast } from './kit.js';
 import { askTurnOff, askTurnOn } from './calls.js';
+import { askRemindersOff, askRemindersOn } from './reminders.js';
 import { officeSettings } from './office.js';
 import { getChoice, setChoice } from './theme.js';
 
@@ -146,6 +147,24 @@ export function openSettings(app) {
     return card;
   }
 
+  // On / off for the follow-up reminders of the Leads tab (the phone shows a notice at the time the rep set)
+  function reminderCard() {
+    const card = h('div', { class: 'card' });
+
+    const draw = async () => {
+      const state = await app.reminderState();
+      const text = state === 'on' ? 'On: your phone reminds you when a follow-up is due.' : state === 'denied' ? 'Android did not allow notifications. Tap to try again.' : 'Off: no notice when a follow-up is due.';
+      card.replaceChildren(row('alarm', 'Follow-up reminders', text, async () => {
+        if (state === 'on') await askRemindersOff(app);
+        else await askRemindersOn(app);
+        draw();
+      }));
+    };
+
+    draw();
+    return card;
+  }
+
   openPage({
     title: 'Settings',
     onClose: () => cleanups.forEach((fn) => fn()),
@@ -160,6 +179,8 @@ export function openSettings(app) {
 
       app.platform.callLog?.available ? group('Calls', callMatchingCard()) : null,
 
+      app.platform.reminders?.available ? group('Reminders', reminderCard()) : null,
+
       group('Export', h('div', { class: 'card' },
         row('share', 'Expenses (CSV)', null, () => exportFile('expenses.csv', expensesCsv, 'text/csv')),
         row('share', 'Clients (CSV)', null, () => exportFile('clients.csv', clientsCsv, 'text/csv')),
@@ -172,7 +193,7 @@ export function openSettings(app) {
 
       group('Privacy', h('div', { class: 'card pad muted small' },
         'This app saves your expenses, bill photos, clients and meetings on this phone only, encrypted and locked with your PIN. ',
-        'It does not read your messages or contacts. Your location is read only at the moment you tap a button to check in at a client, and never in the background. Your call history is read only if you turn on call matching, and then only calls with numbers saved in your clients are kept. Only after you connect to the office, it sends your expenses, bill photos, clients and meetings to the office over a secure connection, and nothing else. ',
+        'It does not read your messages or contacts. Your location is read only at the moment you tap a button to check in at a client, and never in the background. Your call history is read only if you turn on call matching, and then only calls with numbers saved in your clients are kept. If you turn on follow-up reminders, the phone itself shows a short notice at the time you set; the notice never names a client. Only after you connect to the office, it sends your expenses, bill photos, clients and meetings to the office over a secure connection, and nothing else. ',
         'The app locks itself after a minute in the background, and hides its screen in the recent-apps list.')),
 
       group('Danger zone', h('div', { class: 'card' }, row('trash', 'Erase all data', 'Deletes everything on this phone and starts again.', erase, { danger: true }))),

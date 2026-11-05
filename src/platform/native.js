@@ -3,6 +3,7 @@ import { registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { Camera, CameraDirection, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Geolocation } from '@capacitor/geolocation';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
@@ -17,6 +18,7 @@ const CallLogReader = registerPlugin('CallLogReader');
 
 const DB = 'absales';
 const EXPORT_DIR = 'exports';
+const REMINDER_CHANNEL = 'followups';
 
 // ---- secrets (salt, device secret, wrapped data key, PIN attempt counter) ---------------
 
@@ -97,6 +99,36 @@ export async function createNativePlatform() {
       },
       async recent({ sinceMs, limit }) {
         return (await CallLogReader.recent({ sinceMs, limit })).calls ?? [];
+      },
+    },
+
+    // Follow-up reminders: the phone itself shows them at the time the rep set (local notifications, no server). The text is neutral
+    // (core/reminders.js). permission(): 'granted' | 'denied' | 'prompt'. schedule(list) replaces every reminder that is waiting.
+    reminders: {
+      available: true,
+      async permission() {
+        const { display } = await LocalNotifications.checkPermissions();
+        return display === 'granted' ? 'granted' : display === 'denied' ? 'denied' : 'prompt';
+      },
+      async request() {
+        const { display } = await LocalNotifications.requestPermissions();
+        return display === 'granted' ? 'granted' : 'denied';
+      },
+      async schedule(list) {
+        await LocalNotifications.createChannel({ id: REMINDER_CHANNEL, name: 'Follow-up reminders', description: 'A follow-up of a lead is due', importance: 4, visibility: 0, vibration: true });
+        await this.cancelAll();
+        if (!list.length) return;
+        await LocalNotifications.schedule({
+          notifications: list.map((r) => ({ id: r.id, title: r.title, body: r.body, channelId: REMINDER_CHANNEL, schedule: { at: new Date(r.at), allowWhileIdle: true } })),
+        });
+      },
+      async cancelAll() {
+        const { notifications } = await LocalNotifications.getPending();
+        if (notifications.length) await LocalNotifications.cancel({ notifications: notifications.map(({ id }) => ({ id })) });
+      },
+      // the rep tapped a reminder: the app opens (the PIN comes first) and the callback runs
+      onTap(callback) {
+        void LocalNotifications.addListener('localNotificationActionPerformed', () => callback());
       },
     },
 

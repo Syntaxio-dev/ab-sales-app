@@ -782,3 +782,18 @@ a.btn { text-decoration: none; }
 .loc-steps { margin: 0; padding-left: 22px; display: grid; gap: 8px; }
 .loc-steps li { font: 500 15px/1.45 var(--font-ui); color: var(--ink); }
 .loc-guide-note { margin: 12px 0 0; font: 500 13.5px/1.45 var(--font-ui); color: var(--mute); }
+
+/* ---- Leads (v1.15): the lead cards, the follow-up sheet ---- */
+.lead-card { display: grid; gap: 8px; }
+.lead-actions { display: flex; align-items: center; gap: 10px; padding: 0 2px; }
+.lead-actions .btn { flex: 1; }
+.lead-remark { color: var(--ink); font-style: italic; }
+.lead-when { display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px 14px; border-radius: 16px; background: var(--tint); color: var(--ink); font-size: 13.5px; font-weight: 600; }
+.lead-when svg { color: var(--link); flex: none; }
+.lead-last { display: grid; gap: 2px; padding: 10px 14px; border-radius: 14px; background: var(--tint); }
+.lead-last p { margin: 0; overflow-wrap: anywhere; }
+.lead-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+.lead-views { gap: 6px; }
+.lead-views .filter { padding-inline: 12px; font-size: 13px; }
+.lead-prompt { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.lead-prompt .btn { flex: none; }

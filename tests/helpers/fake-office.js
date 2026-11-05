@@ -7,12 +7,14 @@ const error = (status, code, message, errors = {}) => json(status, { code, messa
 
 const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'calls', 'reports', 'product_requests', 'scripts'];
 const NOT_PULLED = new Set(['product_requests']); // a rep's request for a guide note only goes to the office
-const STATUSES = ['new', 'price_to_send', 'price_sent', 'callback', 'meeting_planned', 'negotiation', 'won', 'lost'];
+const STATUSES = ['qualification', 'need_analysis', 'proposal', 'negotiation', 'won', 'lost'];
 const SHARED = new Set(['clients', 'contacts']);
 const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'scripts'];
 const MEETING_STATUSES = ['planned', 'done', 'missed', 'moved'];
 const MEETING_FIELDS = ['status', 'scheduled_at', 'ended_at', 'route_uuid', 'result', 'moved_from', 'time_manual'];
 const SOURCES = ['call', 'walkin', 'whatsapp', 'reference'];
+const LEAD_STATUSES = ['new', 'price_sent', 'better_option', 'call_not_picking', 'want_less_price', 'interested', 'waiting', 'not_interested', 'deal_done', 'deal_lost'];
+const LEAD_FIELDS = ['lead_status', 'lead_remark', 'last_followup_at'];
 const PRESETS = ['Owner / Director', 'Purchase Manager', 'Procurement Head', 'Lab Head', 'Quality (QC) Head', 'Production Head', 'Store Manager', 'Accounts', 'Other'];
 
 export class FakeOffice {
@@ -36,6 +38,7 @@ export class FakeOffice {
     this.limit = 1000;
     this.ignoresPlanning = false; // true = an office that has no planned meetings and routes yet: it keeps none of those fields
     this.ignoresSource = false;  // true = an office that does not know "came through" yet: it keeps no such field and sends none
+    this.ignoresLead = false;    // true = an office from before v1.15: it keeps no lead status / remark / last contact and sends none
   }
 
   addRep(code, password = 'secret-pass-1', name = `Rep ${code}`) {
@@ -173,6 +176,8 @@ export class FakeOffice {
       if (String(r.client_name ?? '').trim().length < 2) return 'The client name is too short.';
       if (!STATUSES.includes(r.status)) return 'The status is not valid.';
       if (!this.ignoresSource && r.source != null && !SOURCES.includes(r.source)) return 'The way it came through is not valid.';
+      if (!this.ignoresLead && r.lead_status != null && !LEAD_STATUSES.includes(r.lead_status)) return 'The lead status is not valid.';
+      if (!this.ignoresLead && r.lead_remark != null && String(r.lead_remark).length > 300) return 'The remark is too long.';
       if (!Array.isArray(r.items) || r.items.length < 1 || r.items.length > 10) return 'An enquiry needs 1 to 10 products.';
       if (r.items.some((i) => String(i?.product ?? '').trim().length < 2 || !Number.isInteger(i?.quantity) || i.quantity < 1)) return 'A product is not valid.';
       if (!Array.isArray(r.timeline ?? []) || (r.timeline ?? []).length > 100) return 'The notes are not valid.';
@@ -230,6 +235,9 @@ export class FakeOffice {
         const old = row?.data ?? {};
         const data = { ...r, has_bill: r.has_bill === true && this.bills.has(r.uuid) };
         if (kind === 'enquiries' && this.ignoresSource) delete data.source;
+        if (kind === 'enquiries' && this.ignoresLead) for (const f of LEAD_FIELDS) delete data[f];
+        // a phone that sends none of the lead keys (older than v1.15) never wipes what the office holds
+        if (kind === 'enquiries' && !this.ignoresLead) for (const f of LEAD_FIELDS) if (!(f in r) && f in old) data[f] = old[f];
         if (this.ignoresLocation && kind === 'clients') for (const f of ['lat', 'lng', 'location_accuracy_m', 'location_at']) delete data[f];
         if (this.ignoresLocation && kind === 'meetings') for (const f of ['checkin_at', 'checkin_lat', 'checkin_lng', 'checkin_accuracy_m', 'has_selfie']) delete data[f];
         if (kind === 'meetings' && this.ignoresPlanning) for (const f of MEETING_FIELDS) delete data[f];

@@ -5,21 +5,18 @@ import {
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
 import { h, icon } from './dom.js';
-import { formatTime, fromLocalInput, rupees, tenAmIn, toLocalInput } from './format.js';
+import { rupees } from './format.js';
 import { businessInput, moneyInput, numberInput, personInput } from './inputs.js';
 import { confirmDialog, field, openPage, slot, toast, validate } from './kit.js';
-import { dateTimeInput } from './pickers.js';
 import { openContactForm } from './people.js';
 import { clientPicker } from './client-picker.js';
 import { openEnquiryPage } from './enquiries.js';
 
-// "New enquiry" in three short steps (Who asked, What do they want, When to follow up). Everything the rep types lives in one plain object
+// "New enquiry" in three short steps (Who asked, What do they want, Stage and notes). The follow-up (status, remark, next reminder) is NOT here since v1.15: it lives in the Leads tab (ui/lead-followup.js); a new enquiry gets its first reminder (tomorrow 10 am) from the store. Everything the rep types lives in one plain object
 // (`state`), so going back never loses anything. The boxes, the rules and store.saveEnquiry are the same as ever: this file only changes
 // how the form is laid out. The store still repeats every rule.
 
-const TITLES = ['Who asked?', 'What do they want?', 'When to follow up?'];
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const TITLES = ['Who asked?', 'What do they want?', 'Stage and notes'];
 const QUICK_BUDGET = [['+50K', 50_000], ['+1L', 100_000], ['+2L', 200_000], ['+5L', 500_000]];
 const MAX_QUANTITY = 100_000;
 const MAX_NOTE = 500;
@@ -30,15 +27,8 @@ const uid = (prefix) => `${prefix}${++counter}`;
 const lower = (text) => String(text ?? '').trim().toLowerCase();
 const tidy = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 const unique = (names) => [...new Map(names.map((n) => [lower(n), n])).values()];
-const validDate = (text) => {
-  const at = fromLocalInput(text);
-  return at && !Number.isNaN(at.getTime()) ? at : null;
-};
 const paiseToText = (paise) => (paise === null || paise === undefined ? '' : paise % 100 === 0 ? String(paise / 100) : (paise / 100).toFixed(2));
 const rupeesText = (paise) => rupees(paise).replace(/\.00$/, '');
-
-// "Thu 29 Oct, 10:00 am"
-const reminderText = (date) => `${DAYS[date.getDay()]} ${date.getDate()} ${MONTHS[date.getMonth()]}, ${formatTime(date)}`;
 
 const newItem = (i = {}) => ({
   product: i.product ?? '',
@@ -57,7 +47,6 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
 
   const wanted = existing?.client_id ?? preset.client_id ?? null;
   const known = wanted && store.clientById(wanted) ? wanted : null;
-  const maxFollow = toLocalInput(new Date(Date.now() + 2 * 365 * 86_400_000 - 86_400_000));
 
   const state = {
     clientId: known,
@@ -68,15 +57,13 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
     personName: !known && existing ? existing.contact_name : '',
     items: (existing?.items?.length ? existing.items : [{}]).map(newItem),
     open: 0,
-    follow: existing ? (existing.next_followup_at ? 'custom' : 'none') : 'tomorrow', // tomorrow | 3days | week | custom | none
-    customAt: existing?.next_followup_at ? toLocalInput(new Date(existing.next_followup_at)) : '',
-    status: existing?.status ?? 'new',
+    status: existing?.status ?? 'qualification',
     source: existing?.source ?? null,
     note: '',
   };
   if (!known) state.personId = null;
 
-  const snap = (withWho = true) => JSON.stringify([withWho ? [state.clientId, state.other, state.clientName, state.search, state.personId, state.personName] : 0, state.items, state.follow, state.customAt, state.status, state.source, state.note]);
+  const snap = (withWho = true) => JSON.stringify([withWho ? [state.clientId, state.other, state.clientName, state.search, state.personId, state.personName] : 0, state.items, state.status, state.source, state.note]);
   const initial = snap();
 
   let step = known && !existing ? 1 : 0; // a client picked on its own page starts on step 2
@@ -374,51 +361,11 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
   state.items.forEach((item) => cards.push(makeCard(item)));
   drawItems();
 
-  // ---- step 3: when to follow up ----------------------------------------------------------------------------------
-
-  const followBox = h('div', null);
-  const picker = dateTimeInput({ min: '2020-01-01T00:00', max: maxFollow, value: state.customAt || toLocalInput(tenAmIn(1)), pickerTitle: 'Follow-up', 'aria-label': 'Follow-up time' });
-  picker.hidden = true;
-  picker.addEventListener('change', () => {
-    state.customAt = picker.value;
-    state.follow = 'custom';
-    drawFollow();
-  });
-  const followSlot = slot(followBox, picker);
-
-  const followDate = () => {
-    if (state.follow === 'tomorrow') return tenAmIn(1);
-    if (state.follow === '3days') return tenAmIn(3);
-    if (state.follow === 'week') return tenAmIn(7);
-    return state.follow === 'custom' ? validDate(state.customAt) : null;
-  };
-
-  function drawFollow() {
-    const choices = [['tomorrow', 'Tomorrow 10 am'], ['3days', 'In 3 days'], ['week', 'Next week']];
-    const closed = ['won', 'lost'].includes(state.status);
-    const at = followDate();
-
-    followBox.replaceChildren(
-      h('div', { class: 'chips', role: 'radiogroup', 'aria-label': 'Follow-up' },
-        ...choices.map(([value, text]) => h('button', {
-          type: 'button', class: 'filter big', role: 'radio', 'aria-checked': String(state.follow === value),
-          onclick() { state.follow = value; followSlot.setError(null); drawFollow(); },
-        }, text)),
-        h('button', {
-          type: 'button', class: 'filter big with-icon', role: 'radio', 'aria-checked': String(state.follow === 'custom'),
-          onclick() { picker.value = state.customAt || toLocalInput(tenAmIn(1)); picker.click(); },
-        }, icon('calendar', 16), 'Pick date')),
-      h('div', { class: 'enq-reminder', role: 'status' },
-        icon('alarm', 18),
-        h('p', { class: 'grow' }, closed ? 'A closed enquiry needs no reminder.' : at ? `Reminder: ${reminderText(at)}` : 'No reminder, this may be forgotten')),
-      h('button', { type: 'button', class: 'link left enq-nofollow', 'aria-pressed': String(state.follow === 'none'), onclick() { state.follow = 'none'; followSlot.setError(null); drawFollow(); } }, 'No follow-up'));
-  }
-
   const stageBox = h('div', { class: 'filters', role: 'radiogroup', 'aria-label': 'Stage' });
   function drawStage() {
     stageBox.replaceChildren(...STATUSES.map((s) => h('button', {
       type: 'button', class: 'filter', role: 'radio', 'aria-checked': String(state.status === s.value),
-      onclick() { state.status = s.value; drawStage(); drawFollow(); },
+      onclick() { state.status = s.value; drawStage(); },
     }, s.label)));
   }
 
@@ -444,7 +391,6 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
     h('div', { class: 'stack enq-step' }, stepHead(0), whoPicker.searchBox, clientSlot.el, whoBox),
     h('div', { class: 'stack enq-step' }, stepHead(1), itemsBox),
     h('div', { class: 'stack enq-step' }, stepHead(2),
-      followSlot.el, picker,
       section('Stage', stageBox),
       section('Came through', sourceBox, 'New'),
       noteSlot.el));
@@ -480,10 +426,7 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
     });
     next.textContent = n === 2 ? 'Save enquiry' : 'Next';
     summary.hidden = n !== 2;
-    if (n === 2) {
-      drawSummary();
-      drawFollow();
-    }
+    if (n === 2) drawSummary();
 
     const scroller = stepEls[n].closest('.page-body');
     if (scroller) scroller.scrollTop = 0;
@@ -501,7 +444,6 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
     if (s === 1) return cards.flatMap((c) => c.checks());
 
     return [
-      [followSlot, state.follow === 'custom' && !validDate(state.customAt) ? 'Pick a valid date and time.' : null],
       [noteSlot, rules.optional(state.note, { max: MAX_NOTE, label: 'Note' })],
     ];
   }
@@ -535,7 +477,6 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
 
     const chosen = state.clientId ? store.clientById(state.clientId) : null;
     const person = chosen && state.personId ? store.contactById(state.personId) : null;
-    const followAt = followDate();
 
     next.disabled = true;
     try {
@@ -553,7 +494,7 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
           quantity: tidy(item.quantity) === '' ? 1 : Number(item.quantity),
           budget_paise: budgetPaise(item),
         })),
-        next_followup_at: followAt ? followAt.toISOString() : null,
+        // no next_followup_at: an edit keeps the stored reminder, a new enquiry gets the first one from the store
         note: state.note,
       });
       page.close();
@@ -584,6 +525,5 @@ export function openEnquiryForm(app, { existing = null, preset = {} } = {}) {
   drawWho();
   drawStage();
   drawSource();
-  drawFollow();
   goStep(step, 0);
 }
