@@ -119,7 +119,10 @@ export async function createNativePlatform() {
         await this.cancelAll();
         if (!list.length) return;
         await LocalNotifications.schedule({
-          notifications: list.map((r) => ({ id: r.id, title: r.title, body: r.body, channelId: REMINDER_CHANNEL, schedule: { at: new Date(r.at), allowWhileIdle: true } })),
+          // isExactNotification: false is essential. The plugin's default (true) opens Android's "Alarms and reminders" settings screen
+          // on every schedule() when the app has no exact-alarm right (we deliberately do not ask for it): the rep saw that screen each
+          // time the app opened. Not exact = a quiet alarm that may come a few minutes late, and nothing is opened.
+          notifications: list.map((r) => ({ id: r.id, title: r.title, body: r.body, channelId: REMINDER_CHANNEL, isExactNotification: false, schedule: { at: new Date(r.at), allowWhileIdle: true } })),
         });
       },
       async cancelAll() {

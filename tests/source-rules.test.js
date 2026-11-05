@@ -101,6 +101,16 @@ test('the manifest asks for the internet, the call history, the location (once p
   assert.doesNotMatch(manifest, /ACCESS_BACKGROUND_LOCATION|USE_EXACT_ALARM/);
 });
 
+test('reminders are inexact alarms: the plugin must never open the "Alarms and reminders" settings screen', () => {
+  // the plugin's default is an exact alarm, and without the exact-alarm right it opens that Android screen on every schedule()
+  // (found on a phone on 5 Nov 2026: it came up each time the app was opened). The manifest does not ask for the right on purpose.
+  const native = strip(readFileSync(join(SRC, 'platform/native.js'), 'utf8'));
+  assert.match(native, /LocalNotifications\.schedule\(/);
+  assert.match(native, /isExactNotification:\s*false/);
+  assert.doesNotMatch(native, /isExactNotification:\s*true|isExactMandatory:\s*true|changeExactNotificationSetting/);
+  assert.equal(offenders(/LocalNotifications\.schedule\(/, { except: ['platform/native.js'] }).length, 0, 'only native.js schedules notifications');
+});
+
 test('the native call-history reader only reads', () => {
   const java = readFileSync(new URL('../android/app/src/main/java/com/agarwalbrothers/sales/CallLogReaderPlugin.java', import.meta.url), 'utf8');
   assert.doesNotMatch(java, /\.insert\(|\.delete\(|\.update\(|WRITE_CALL_LOG|CALL_PHONE|READ_SMS/);
