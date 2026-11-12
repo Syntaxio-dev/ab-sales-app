@@ -66,7 +66,14 @@ const MUTATORS = [
 ];
 
 const MAX_SCRIPT = 3000;
-const nowIso = () => new Date().toISOString();
+// Every stamp is at least 1 ms after the one before, so an edit made right after a save (or while the sync is sending that save) never gets the
+// SAME updated_at: the sync tells "the record I sent" from "the record as it is now" by that time (markSynced), and a tie would lose the edit.
+// (Found on 12 Nov 2026: on a fast CI machine two saves landed in one millisecond.)
+let lastStamp = 0;
+const nowIso = () => {
+  lastStamp = Math.max(Date.now(), lastStamp + 1);
+  return new Date(lastStamp).toISOString();
+};
 const isProgressId = (id) => typeof id === 'string' && id.length > 0 && id.length <= 60;
 
 // What is kept of the rep's place in the guide: ids and booleans only. Anything else in the slot is dropped when it is read.

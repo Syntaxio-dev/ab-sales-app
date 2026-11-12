@@ -208,3 +208,25 @@ test('listeners hear about changes and can stop listening', async () => {
 
   assert.equal(calls, 1);
 });
+
+test('saves made in the very same millisecond still get a later updated_at each time', async () => {
+  // The sync tells "the record I sent" from "the record as it is now" by updated_at. On a fast machine (found on a CI runner on 12 Nov 2026)
+  // an edit made right after a save used to get the SAME stamp, and the sync then took the edit for the record it had just sent and lost it.
+  const store = await Store.open(persist, key);
+  const real = Date.now;
+  Date.now = () => 1_900_000_000_000; // the clock does not move at all
+  try {
+    const first = await store.saveExpense(expense({ note: 'first' }));
+    const edited = await store.saveExpense({ ...expense({ note: 'edited' }), id: first.id });
+    const third = await store.saveExpense({ ...expense({ note: 'third' }), id: first.id });
+
+    assert.ok(Date.parse(edited.updated_at) > Date.parse(first.updated_at));
+    assert.ok(Date.parse(third.updated_at) > Date.parse(edited.updated_at));
+
+    // so the bookkeeping of the FIRST send can no longer mark the edited record as sent
+    await store.markSynced('expense', first.id, first.updated_at);
+    assert.equal(store.expenses[0].synced, false);
+  } finally {
+    Date.now = real;
+  }
+});
