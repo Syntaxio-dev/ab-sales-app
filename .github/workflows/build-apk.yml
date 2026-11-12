@@ -37,7 +37,15 @@ jobs:
           fi
       - run: npm ci
       # the build stops here if a security, data-compatibility or logic test fails
-      - run: npm test
+      - name: Run the tests
+        run: |
+          npm test 2>&1 | tee test.log
+          CODE=${PIPESTATUS[0]}
+          if [ "$CODE" != "0" ]; then
+            # the names of the failed tests and their reasons, as annotations (the full log needs a sign-in to read)
+            grep -E "not ok|error:|message:|expected:|actual:|operator:" test.log | head -40 | while IFS= read -r line; do echo "::error::${line//%/%25}"; done
+          fi
+          exit $CODE
       - name: The office address must be set for a release
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ -z "$SERVER_URL" ]; then
