@@ -24,6 +24,7 @@ export class FakeOffice {
     this.rows = Object.fromEntries(KINDS.map((k) => [k, new Map()]));   // uuid -> { owner, data, rev, deleted, assignedTo? }
     this.positions = [...PRESETS];
     this.products = [];          // the product guide the manager wrote (raw, as the API sends it)
+    this.brands = null;          // the brand guide (v1.18); null = an office older than that (sends no `brands` key)
     this.productsVersion = 'v0000000000000001';
     this.bills = new Map();      // expense uuid -> base64
     this.selfies = new Map();    // meeting uuid -> base64 (the check-in selfie)
@@ -61,6 +62,12 @@ export class FakeOffice {
   // the manager edits the product guide in the admin: any change is a new version stamp
   setProducts(products) {
     this.products = products;
+    this.productsVersion = `v${String(++this.rev).padStart(15, '0')}`;
+  }
+
+  // the manager edits the brand guide: it travels with the product guide and has the same version stamp
+  setBrands(brands) {
+    this.brands = brands;
     this.productsVersion = `v${String(++this.rev).padStart(15, '0')}`;
   }
 
@@ -107,7 +114,7 @@ export class FakeOffice {
     if (path === '/products' && method === 'GET') {
       return u.searchParams.get('version') === this.productsVersion
         ? json(200, { version: this.productsVersion, unchanged: true })
-        : json(200, { version: this.productsVersion, unchanged: false, products: this.products });
+        : json(200, { version: this.productsVersion, unchanged: false, products: this.products, ...(this.brands ? { brands: this.brands } : {}) });
     }
 
     const selfie = /^\/meetings\/([^/]+)\/selfie$/.exec(path);

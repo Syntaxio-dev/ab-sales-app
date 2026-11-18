@@ -797,3 +797,13 @@ a.btn { text-decoration: none; }
 .lead-views .filter { padding-inline: 12px; font-size: 13px; }
 .lead-prompt { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .lead-prompt .btn { flex: none; }
+
+/* ---- brand guide (v1.18): brand names that open the brand brief, and the client's doubts with the answer ---- */
+.brand-chip { border: 1px solid var(--line-strong); cursor: pointer; min-height: 32px; padding: 0 12px; font-size: 12.5px; color: var(--ink); background: var(--mu-bg); }
+.brand-chip:active { transform: scale(0.97); }
+.brand-chip:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.brand-cloud { gap: 8px; }
+.objection + .objection { border-top: 1px solid var(--line); padding-top: 12px; }
+.objection-if { font-weight: 700; color: var(--ink); margin: 0 0 4px; }
+.objection-then { margin: 0; color: var(--ink); line-height: 1.45; }
+.pitch-card .bullets { margin: 6px 0 0; }

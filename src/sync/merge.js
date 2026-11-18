@@ -324,6 +324,34 @@ export function cleanProduct(r) {
   };
 }
 
+// One brand of the brand guide (v1.18). Which products carry it is worked out on the phone from the product guide.
+export function cleanBrand(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const name = text(r.name, 100);
+  if (name.length < 2) return null;
+
+  const pairs = (value, max, keyA, keyB, lenA, lenB) => (Array.isArray(value)
+    ? value.map((v) => ({ [keyA]: text(v?.[keyA], lenA), [keyB]: text(v?.[keyB], lenB) })).slice(0, max)
+    : []);
+
+  return {
+    id: r.uuid,
+    name,
+    origin: text(r.origin, 160),
+    channel: text(r.channel, 160),
+    about: text(r.about, 1000),
+    known_for: lines(r.known_for, 6, 300),
+    known_lines: lines(r.known_lines, 8, 300),
+    best_for: lines(r.best_for, 6, 300),
+    pitch: lines(r.pitch, 6, 300),
+    objections: pairs(r.objections, 6, 'if', 'then', 200, 400).filter((o) => o.if && o.then),
+    watch_out: lines(r.watch_out, 4, 300),
+    competitors: pairs(r.competitors, 8, 'name', 'note', 100, 400).filter((c) => c.name),
+    sort: Number.isInteger(r.sort) && r.sort >= 0 && r.sort <= 65_000 ? r.sort : 0,
+  };
+}
+
 // A rep's own script (private; it comes back on a new phone).
 export function cleanScript(r) {
   if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
@@ -358,7 +386,19 @@ export function cleanGuide(answer) {
     }
   }
 
-  return { version: answer.version.slice(0, 40), products };
+  // the brand guide came with v1.18; an office without it sends no `brands` key (= no brands)
+  const names = new Set();
+  const brands = [];
+  for (const raw of Array.isArray(answer.brands) ? answer.brands.slice(0, 300) : []) {
+    const brand = cleanBrand(raw);
+    const key = brand?.name.toLowerCase();
+    if (brand && !names.has(key)) {
+      names.add(key);
+      brands.push(brand);
+    }
+  }
+
+  return { version: answer.version.slice(0, 40), products, brands };
 }
 
 // A request for a guide note only ever goes from the phone to the office: nothing comes back to be merged.

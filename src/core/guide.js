@@ -147,3 +147,118 @@ export function groupsOf(products) {
 
 /** "Sartorius, Mettler" or "No brand listed" */
 export const brandLine = (list) => (list.length ? list.join(', ') : 'No brand listed');
+
+// ---- the brand guide (v1.18) -------------------------------------------------------------------------------------------------
+// The manager writes what a brand is best at; WHICH of our products carry it, and in which budget tier, comes from the product
+// guide, so nothing is typed twice and the two never disagree.
+
+const BRAND_DEFAULTS = { origin: '', channel: '', about: '', known_for: [], known_lines: [], best_for: [], pitch: [], objections: [], watch_out: [], competitors: [], sort: 0 };
+export const withBrandDefaults = (brand) => ({ ...BRAND_DEFAULTS, ...brand });
+
+// "Cole-Parmer", "cole parmer" and "Cole Parmer " are one brand.
+export const brandKey = (name) => words(name).join(' ');
+
+/** The brand of the brand guide with this name, or null. */
+export const brandNamed = (brands, name) => {
+  const key = brandKey(name);
+  return (key && brands.find((b) => brandKey(b.name) === key)) || null;
+};
+
+/** The products that carry this brand: [{ product, tier }] (tier = TIERS entry), in the order of the sheet. */
+export function brandProducts(products, name) {
+  const key = brandKey(name);
+  const out = [];
+  if (!key) return out;
+  for (const product of [...products].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name))) {
+    const tier = TIERS.find((t) => product[t.key].some((b) => brandKey(b) === key));
+    if (tier) out.push({ product, tier });
+  }
+  return out;
+}
+
+/** How many of our products carry the brand in each tier: { premium: 3, economy: 1, lite: 0 }. */
+export function brandTierCounts(products, name) {
+  const counts = { premium: 0, economy: 0, lite: 0 };
+  for (const { tier } of brandProducts(products, name)) counts[tier.value] += 1;
+  return counts;
+}
+
+/** "Premium" / "Premium and economy" / "" : the tiers the brand sits in, for a one-line label. */
+export function brandTierLine(products, name) {
+  const counts = brandTierCounts(products, name);
+  const used = TIERS.filter((t) => counts[t.value]).map((t) => t.label);
+  if (!used.length) return '';
+  return used.length === 1 ? used[0] : `${used.slice(0, -1).join(', ')} and ${used.at(-1).toLowerCase()}`;
+}
+
+/**
+ * The other brands of OUR guide that sit in the same products (any tier): [{ name, shared, tierHint }] most shared first, at most `max`.
+ * `tierHint` = 'premium' | 'economy' | 'lite': where that brand usually sits in those shared products (so the rep sees "the premium
+ * alternative" or "the cheaper option").
+ */
+export function guideRivals(products, name, max = 8) {
+  const key = brandKey(name);
+  const map = new Map();
+  for (const { product } of brandProducts(products, name)) {
+    for (const tier of TIERS) {
+      for (const other of product[tier.key]) {
+        const k = brandKey(other);
+        if (!k || k === key) continue;
+        const row = map.get(k) ?? { name: other, shared: 0, tiers: { premium: 0, economy: 0, lite: 0 }, products: new Set() };
+        if (!row.products.has(product.id)) {
+          row.products.add(product.id);
+          row.shared += 1;
+        }
+        row.tiers[tier.value] += 1;
+        map.set(k, row);
+      }
+    }
+  }
+  return [...map.values()]
+    .map((r) => ({ name: r.name, shared: r.shared, tierHint: Object.entries(r.tiers).sort((a, b) => b[1] - a[1])[0][0] }))
+    .sort((a, b) => b.shared - a.shared || a.name.localeCompare(b.name))
+    .slice(0, max);
+}
+
+/** Every brand the rep can open: the brand guide's brands plus any brand that is only named in the product lists. Most products first. */
+export function allBrands(brands, products) {
+  const map = new Map();
+  for (const b of brands) map.set(brandKey(b.name), { name: b.name, brand: b, count: 0 });
+  for (const p of products) {
+    const seen = new Set();
+    for (const t of TIERS) {
+      for (const n of p[t.key]) {
+        const k = brandKey(n);
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        const row = map.get(k) ?? { name: n, brand: null, count: 0 };
+        row.count += 1;
+        map.set(k, row);
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/** The brands whose name or notes match every word typed (name first). With no words: none. */
+export function searchBrands(brands, query) {
+  const wanted = words(query);
+  if (!wanted.length) return [];
+  const out = [];
+  for (const brand of brands) {
+    const nameTokens = words(brand.name);
+    const rest = words([brand.origin, brand.about, ...brand.known_for, ...brand.known_lines, ...brand.best_for].join(' '));
+    let score = 0;
+    let all = true;
+    for (const w of wanted) {
+      if (nameTokens.some((t) => t === w || t.startsWith(w))) score += 10;
+      else if (rest.some((t) => t === w || t.startsWith(w))) score += 2;
+      else {
+        all = false;
+        break;
+      }
+    }
+    if (all) out.push({ brand, score });
+  }
+  return out.sort((a, b) => b.score - a.score || a.brand.name.localeCompare(b.brand.name)).map((r) => r.brand);
+}

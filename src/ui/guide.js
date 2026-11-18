@@ -1,6 +1,7 @@
-import { CLIENT_TYPES, TIERS, brandLine, cheatNotes, clientTypeOf, firstSentence, groupsOf, highlight, productsForClientType, searchProducts, searchScripts } from '../core/guide.js';
+import { CLIENT_TYPES, TIERS, allBrands, brandLine, cheatNotes, clientTypeOf, firstSentence, groupsOf, highlight, productsForClientType, searchProducts, searchScripts } from '../core/guide.js';
 import * as rules from '../core/rules.js';
 import { ValidationError } from '../data/store.js';
+import { brandChip, brandMatches, brandRow, openBrandsPage, useProductOpener } from './brands.js';
 import { h, icon } from './dom.js';
 import { formatDay } from './format.js';
 import { businessInput } from './inputs.js';
@@ -16,6 +17,7 @@ import { empty, fill, head } from './parts.js';
 
 const SHOWN = 60; // rows of a search that are drawn at once
 const RECOMMENDED = 8;
+const BRANDS_SHOWN = 12; // brand chips on the Guide tab (the rest under "See all")
 
 // What the rep typed / chose stays while the screen is redrawn (a sync finishing) and while another tab is looked at.
 const view = { query: '', type: null };
@@ -100,9 +102,18 @@ export function renderGuide(container, app, ctx) {
     const browse = h('button', { class: 'browse-row', type: 'button', onclick: () => openBrowse(app) },
       h('span', null, `Browse all ${products.length} products`), icon('chevron', 18));
 
+    // the brands we sell: the ones in the most products first, tap one for its brief (what it is best at, how to pitch and defend it)
+    const brands = allBrands(store.guideBrands, products);
+    const brandSection = brands.length ? h('section', { class: 'guide-section' },
+      h('div', { class: 'section-head' },
+        h('p', { class: 'eyebrow' }, `Brands we sell (${brands.length})`),
+        h('button', { class: 'link', type: 'button', onclick: () => openBrandsPage(app) }, 'See all')),
+      h('div', { class: 'people brand-cloud' }, brands.slice(0, BRANDS_SHOWN).map((b) => brandChip(app, b.name)))) : null;
+
     return [
       h('section', { class: 'guide-section' }, tiles),
       recommended,
+      brandSection,
       mine,
       browse,
       h('button', { class: 'btn block', type: 'button', onclick: () => askNote(app, null) }, icon('edit', 18), 'Ask the manager to add something'),
@@ -112,13 +123,15 @@ export function renderGuide(container, app, ctx) {
   const resultsView = (q) => {
     const found = searchProducts(products, q);
     const scripts = searchScripts(store.scripts, q);
+    const brands = brandMatches(app, q);
 
     return [
-      h('p', { class: 'muted small' }, `${found.length} of ${products.length} products${scripts.length ? ` · ${scripts.length} of your scripts` : ''}`),
+      h('p', { class: 'muted small' }, `${found.length} of ${products.length} products${brands.length ? ` · ${brands.length} brand${brands.length === 1 ? '' : 's'}` : ''}${scripts.length ? ` · ${scripts.length} of your scripts` : ''}`),
+      brands.length ? h('section', { class: 'guide-section' }, h('p', { class: 'eyebrow' }, 'Brands'), h('div', { class: 'list' }, brands.slice(0, 5).map((b) => brandRow(app, b)))) : null,
       scripts.length ? h('section', { class: 'guide-section' }, h('p', { class: 'eyebrow' }, 'My scripts'), h('div', { class: 'list' }, scripts.slice(0, 10).map((s) => scriptRow(app, s)))) : null,
       found.length
         ? h('section', { class: 'guide-section' }, h('p', { class: 'eyebrow' }, 'Products'), h('div', { class: 'list' }, found.slice(0, SHOWN).map(({ product, found: where }) => productRow(app, product, where))))
-        : (scripts.length ? null : empty('search', 'Nothing found', 'Try one word, a brand name, or a problem.')),
+        : (scripts.length || brands.length ? null : empty('search', 'Nothing found', 'Try one word, a brand name, or a problem.')),
     ];
   };
 
@@ -134,7 +147,7 @@ export function renderGuide(container, app, ctx) {
 
   // the search sits right under the title, big and clear, and works on products, brands, problems and the rep's own scripts
   const input = h('input', {
-    class: 'input', type: 'search', placeholder: 'Search products, brands, scripts', autocomplete: 'off', enterKeyHint: 'search', 'aria-label': 'Search the product guide', value: view.query,
+    class: 'input', type: 'search', placeholder: 'Search products, brands, scripts', autocomplete: 'off', enterKeyHint: 'search', 'aria-label': 'Search the product and brand guide', value: view.query,
   });
   input.addEventListener('input', () => {
     view.query = input.value;
@@ -259,7 +272,7 @@ export function openProduct(app, id) {
       h('div', { class: 'card pad stack' }, TIERS.map((t) => h('div', { class: 'tier' },
         h('div', { class: 'tier-head' }, h('span', { class: `chip ${t.value}` }, t.label), h('span', { class: 'muted small' }, t.hint)),
         p[t.key].length
-          ? h('div', { class: 'people' }, p[t.key].map((brand) => h('span', { class: 'chip' }, brand)))
+          ? h('div', { class: 'people' }, p[t.key].map((brand) => brandChip(app, brand)))
           : h('p', { class: 'muted small' }, 'No brand listed for this range.')))));
 
     const scripts = h('section', { class: 'guide-section' },
@@ -317,6 +330,8 @@ export function openProduct(app, id) {
   draw();
   return page;
 }
+
+useProductOpener(openProduct); // a product row on a brand page opens the product brief
 
 // ---- the cheat sheet: a panel that slides up over the brief ----
 

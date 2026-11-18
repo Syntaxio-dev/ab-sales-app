@@ -4,7 +4,7 @@ import * as enquiryRules from '../core/enquiry.js';
 import * as meetingRules from '../core/meeting.js';
 import * as leadRules from '../core/lead.js';
 import * as geo from '../core/geo.js';
-import { CLIENT_TYPE_IDS, withGuideDefaults } from '../core/guide.js';
+import { CLIENT_TYPE_IDS, withBrandDefaults, withGuideDefaults } from '../core/guide.js';
 import { PRESET_POSITIONS, cleanPosition, positionKey } from '../core/positions.js';
 import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/crypto.js';
 
@@ -112,7 +112,7 @@ export class Store {
   #notes = new Map();
   #scripts = new Map();
   #progress = { learned: {}, ticks: {}, client_type: null };
-  #guide = { version: null, products: [] };
+  #guide = { version: null, products: [], brands: [] };
   #profile = null;
   #prefs = {};
   #positions = { names: [], pending: [] };
@@ -154,7 +154,16 @@ export class Store {
     if (progress) store.#progress = cleanProgress(progress);
 
     const guide = await store.#read(GUIDE_KEY);
-    if (guide && Array.isArray(guide.products)) store.#guide = { version: typeof guide.version === 'string' ? guide.version : null, products: guide.products.filter((p) => p?.id).map(withGuideDefaults) };
+    if (guide && Array.isArray(guide.products)) {
+      // A guide stored by an app older than 1.18 has no `brands` key: it may hold the office's newest stamp while the brands were
+      // dropped, so its stamp is forgotten and the next sync fetches the whole guide once (with the brands).
+      const hasBrands = Array.isArray(guide.brands);
+      store.#guide = {
+        version: hasBrands && typeof guide.version === 'string' ? guide.version : null,
+        products: guide.products.filter((p) => p?.id).map(withGuideDefaults),
+        brands: hasBrands ? guide.brands.filter((b) => b?.id && b?.name).map(withBrandDefaults) : [],
+      };
+    }
 
     const positions = await store.#read(POSITIONS_KEY);
     if (positions && Array.isArray(positions.names)) store.#positions = { names: positions.names.filter((n) => typeof n === 'string'), pending: (positions.pending ?? []).filter((n) => typeof n === 'string') };
@@ -181,7 +190,7 @@ export class Store {
     this.#notes.clear();
     this.#scripts.clear();
     this.#progress = { learned: {}, ticks: {}, client_type: null };
-    this.#guide = { version: null, products: [] };
+    this.#guide = { version: null, products: [], brands: [] };
     this.#profile = null;
     this.#prefs = {};
     this.#positions = { names: [], pending: [] };
@@ -841,7 +850,7 @@ export class Store {
     }
     for (const slot of [PROFILE_KEY, SYNC_KEY, PREFS_KEY, POSITIONS_KEY, GUIDE_KEY, PROGRESS_KEY]) await this.#persist.del(slot);
 
-    this.#guide = { version: null, products: [] };
+    this.#guide = { version: null, products: [], brands: [] };
     this.#progress = { learned: {}, ticks: {}, client_type: null };
     for (const kind of KINDS) this.#map(kind).clear();
     this.#tombs.clear();
@@ -867,9 +876,18 @@ export class Store {
     return (id && this.#guide.products.find((p) => p.id === id)) || null;
   }
 
+  // The brand guide (v1.18): what each brand we sell is best at, how to pitch and defend it. Read only, like the products.
+  get guideBrands() {
+    return this.#guide.brands;
+  }
+
   // The list the office sent (already cleaned by src/sync/merge.js). It replaces the old one as a whole: a product the manager removed is gone.
-  async setGuideFromServer({ version, products }) {
-    this.#guide = { version: typeof version === 'string' ? version : null, products: Array.isArray(products) ? products.map(withGuideDefaults) : [] };
+  async setGuideFromServer({ version, products, brands }) {
+    this.#guide = {
+      version: typeof version === 'string' ? version : null,
+      products: Array.isArray(products) ? products.map(withGuideDefaults) : [],
+      brands: Array.isArray(brands) ? brands.map(withBrandDefaults) : [],
+    };
     await this.#write(GUIDE_KEY, this.#guide);
     this.#changed(false);
   }
