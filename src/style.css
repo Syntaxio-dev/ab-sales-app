@@ -807,3 +807,8 @@ a.btn { text-decoration: none; }
 .objection-if { font-weight: 700; color: var(--ink); margin: 0 0 4px; }
 .objection-then { margin: 0; color: var(--ink); line-height: 1.45; }
 .pitch-card .bullets { margin: 6px 0 0; }
+
+/* ---- prospecting (v1.19): the Prospects side of the Clients tab, the people cards of the form ---- */
+.item a.link.sub { display: block; overflow-wrap: anywhere; text-align: left; padding: 0; min-height: 0; margin: 2px 0 0; }
+.person-card .section-head { margin-bottom: 0; }
+.prospect-person { align-items: flex-start; }

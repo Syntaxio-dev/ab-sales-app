@@ -7,6 +7,7 @@ import { allJson, clientsCsv, expensesCsv, meetingsCsv } from './export.js';
 import { confirmDialog, dialog, openPage, toast } from './kit.js';
 import { askTurnOff, askTurnOn } from './calls.js';
 import { askRemindersOff, askRemindersOn } from './reminders.js';
+import { openBugReport } from './bug-report.js';
 import { officeSettings } from './office.js';
 import { getChoice, setChoice } from './theme.js';
 
@@ -181,6 +182,9 @@ export function openSettings(app) {
 
       app.platform.reminders?.available ? group('Reminders', reminderCard()) : null,
 
+      group('Help', h('div', { class: 'card' },
+        row('alert', 'Report a bug', 'Something not working? Tell the office.', () => openBugReport(app)))),
+
       group('Export', h('div', { class: 'card' },
         row('share', 'Expenses (CSV)', null, () => exportFile('expenses.csv', expensesCsv, 'text/csv')),
         row('share', 'Clients (CSV)', null, () => exportFile('clients.csv', clientsCsv, 'text/csv')),
@@ -193,7 +197,7 @@ export function openSettings(app) {
 
       group('Privacy', h('div', { class: 'card pad muted small' },
         'This app saves your expenses, bill photos, clients and meetings on this phone only, encrypted and locked with your PIN. ',
-        'It does not read your messages or contacts. Your location is read only at the moment you tap a button to check in at a client, and never in the background. Your call history is read only if you turn on call matching, and then only calls with numbers saved in your clients are kept. If you turn on follow-up reminders, the phone itself shows a short notice at the time you set; the notice never names a client. Only after you connect to the office, it sends your expenses, bill photos, clients and meetings to the office over a secure connection, and nothing else. ',
+        'It does not read your messages or contacts. Your location is read only at the moment you tap a button to check in at a client, and never in the background. Your call history is read only if you turn on call matching, and then only calls with numbers saved in your clients are kept. If you turn on follow-up reminders, the phone itself shows a short notice at the time you set; the notice never names a client. Only after you connect to the office, it sends your expenses, bill photos, clients, prospects, meetings and bug reports to the office over a secure connection, and nothing else. A bug report holds only what you type, the place you pick and the app version. ',
         'The app locks itself after a minute in the background, and hides its screen in the recent-apps list.')),
 
       group('Danger zone', h('div', { class: 'card' }, row('trash', 'Erase all data', 'Deletes everything on this phone and starts again.', erase, { danger: true }))),

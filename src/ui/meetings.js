@@ -7,6 +7,7 @@ import { formatDay, formatHeadDay, formatTime, initials } from './format.js';
 import { businessInput } from './inputs.js';
 import { confirmDialog, dialog, field, openBottomSheet, openPage, toast } from './kit.js';
 import { openSchedule } from './meeting-schedule.js';
+import { openRoutePlan } from './route-plan.js';
 import { openVisit } from './meeting-visit.js';
 import { timeInput } from './pickers.js';
 import { empty, fill, head } from './parts.js';
@@ -206,7 +207,9 @@ export function renderMeetings(container, app, ctx) {
     } else {
       body.push(h('div', { class: 'card pad stack meet-empty' },
         h('p', { class: 'muted' }, past ? 'Nothing logged' : `No meetings on ${isToday ? 'today' : WEEKDAYS[selected.getDay()]}`),
-        past ? null : h('button', { type: 'button', class: 'btn small-btn', onclick: () => openSchedule(app, { day: selected }) }, icon('plus', 18), 'Schedule one')));
+        past ? null : h('div', { class: 'stack' },
+          h('button', { type: 'button', class: 'btn small-btn', onclick: () => openSchedule(app, { day: selected }) }, icon('plus', 18), 'Schedule one'),
+          h('button', { type: 'button', class: 'btn small-btn', onclick: () => openRoutePlan(app, { day: selected }) }, icon('route', 18), 'Plan a route'))));
     }
     body.push(h('button', { type: 'button', class: 'link left', onclick: () => { upcoming = true; redraw(); } }, 'Show all upcoming'));
   }
@@ -215,7 +218,9 @@ export function renderMeetings(container, app, ctx) {
     head({
       eyebrow: formatHeadDay(selected),
       title: 'Meetings',
-      right: h('button', { type: 'button', class: 'icon-btn add-round', 'aria-label': 'Schedule a meeting', onclick: () => openSchedule(app, { day: selected }) }, icon('plus', 22)),
+      right: h('div', { class: 'head-right' },
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Plan a route', onclick: () => openRoutePlan(app, { day: selected }) }, icon('route', 22)),
+        h('button', { type: 'button', class: 'icon-btn add-round', 'aria-label': 'Schedule a meeting', onclick: () => openSchedule(app, { day: selected }) }, icon('plus', 22))),
     }),
     strip,
     week,

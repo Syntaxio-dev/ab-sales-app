@@ -3,6 +3,20 @@
 
 const FORBIDDEN = new Set(['innerHTML', 'outerHTML', 'srcdoc']);
 
+// A browser prints the WORD "null" for an empty part handed to append / prepend / replaceChildren. Screens build their parts with conditions
+// (`cond ? element : null`), and this bit us again and again (the visit page, the route planner, 25 Nov 2026). So the three methods are made to
+// skip empty parts, once, here: a screen can no longer show "null" by mistake. (No effect where there is no DOM, as in the tests.)
+if (typeof Element !== 'undefined') {
+  const empty = (part) => part === null || part === undefined || part === false;
+
+  for (const name of ['append', 'prepend', 'replaceChildren']) {
+    const native = Element.prototype[name];
+    Element.prototype[name] = function skipEmpty(...parts) {
+      return native.apply(this, parts.flat(Infinity).filter((part) => !empty(part)));
+    };
+  }
+}
+
 export function h(tag, props, ...children) {
   const el = document.createElement(tag);
 

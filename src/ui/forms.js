@@ -200,18 +200,19 @@ export function openExpenseForm(app, existing = null) {
 
 // ---- client ------------------------------------------------------------------
 
-export function openClientForm(app, existing = null) {
+// `prefill` ({ name, phone, city }) starts a NEW client from a prospect; `onSaved(client)` replaces the usual next step (the first person).
+export function openClientForm(app, existing = null, { prefill = null, onSaved = null } = {}) {
   const store = app.store;
   if (existing && !store.canEdit(existing)) { // somebody else's client: read only (the client page shows it)
     toast(`Added by ${store.addedBy(existing)}. Only they, or your manager, can change it.`);
     return;
   }
 
-  const name = field('Client name', businessInput({ placeholder: 'For example JK Cement', value: existing?.name ?? '' }), 'The company or customer. Add the people who work there on the next screen.');
+  const name = field('Client name', businessInput({ placeholder: 'For example JK Cement', value: existing?.name ?? prefill?.name ?? '' }), 'The company or customer. Add the people who work there on the next screen.');
   // "company" is the old way of writing the same thing: only shown for a client that already has one
   const company = field('Group / company (optional)', businessInput({ value: existing?.company ?? '' }));
-  const phone = phoneField('Main number (optional)', { value: existing?.phone ?? '', landline: true, hint: 'For example the office board number.' });
-  const city = field('Place', placeInput({ placeholder: 'Town or city', value: existing?.city ?? '' }), 'Required. The team can filter clients by place.');
+  const phone = phoneField('Main number (optional)', { value: existing?.phone ?? prefill?.phone ?? '', landline: true, hint: 'For example the office board number.' });
+  const city = field('Place', placeInput({ placeholder: 'Town or city', value: existing?.city ?? prefill?.city ?? '' }), 'Required. The team can filter clients by place.');
   city.input.after(cityPicks(city.input));
   const where = locationField(app, { existing, getName: () => name.input.value, getPlace: () => city.input.value });
   company.el.hidden = !existing?.company;
@@ -246,7 +247,10 @@ export function openClientForm(app, existing = null) {
     if (!done) return;
 
     page.close();
-    if (!existing) openContactForm(app, { client: saved }); // a new client: straight on to the first person at it
+    if (!existing) { // a new client: straight on to the first person at it
+      if (onSaved) onSaved(saved);
+      else openContactForm(app, { client: saved });
+    }
   });
 
   const page = openPage({

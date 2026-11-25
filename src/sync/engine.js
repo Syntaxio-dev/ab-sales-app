@@ -28,6 +28,10 @@ export const KINDS = [
   { kind: 'report', wire: 'reports', log: true },
   { kind: 'note', wire: 'product_requests', log: true }, // a rep asks for a note in the product guide: only ever sent
   { kind: 'script', wire: 'scripts' }, // the rep's own pitch for a product: private, comes back on a new phone
+  // v1.19 (all three "optional": an office that does not know them yet never sees the keys). A prospect is sent before the calls to it.
+  { kind: 'prospect', wire: 'prospects', optional: true }, // the shared prospecting pool
+  { kind: 'prospectnote', wire: 'prospect_notes', log: true, optional: true }, // a call to a prospect: sent once, never changed or deleted
+  { kind: 'bug', wire: 'bug_reports', log: true, optional: true }, // a rep's bug report: only ever sent
 ];
 
 const wireOf = {
@@ -48,6 +52,7 @@ const wireOf = {
     ...(r.checkin_at ? {
       checkin_at: r.checkin_at, checkin_lat: r.checkin_lat, checkin_lng: r.checkin_lng, checkin_accuracy_m: r.checkin_accuracy_m, has_selfie: r.has_selfie,
     } : {}),
+    ...(r.prospect_id ? { prospect_uuid: r.prospect_id } : {}), // a visit planned to a prospect (v1.19); never sent for any other meeting
     ...(r.status !== 'done' || r.scheduled_at ? {
       status: r.status, scheduled_at: r.scheduled_at, ended_at: r.ended_at, route_uuid: r.route_id, result: r.result, moved_from: r.moved_from, time_manual: r.time_manual,
     } : {}),
@@ -68,6 +73,12 @@ const wireOf = {
   }),
   note: (r) => ({ uuid: r.id, product_uuid: r.product_id, product_name: r.product_name, body: r.body, updated_at: r.updated_at }),
   script: (r) => ({ uuid: r.id, product_uuid: r.product_id, product_name: r.product_name, title: r.title, body: r.body, updated_at: r.updated_at }),
+  prospect: (r) => ({
+    uuid: r.id, name: r.name, territory: r.territory, address: r.address, source: r.source ?? null, notes: r.notes, updated_at: r.updated_at,
+    people: r.people.map((p) => ({ name: p.name, position: p.position, phone: p.phone, email: p.email, linkedin: p.linkedin })),
+  }),
+  prospectnote: (r) => ({ uuid: r.id, prospect_uuid: r.prospect_id, outcome: r.outcome, remark: r.remark, next_followup_at: r.next_followup_at, updated_at: r.updated_at, created_at: r.created_at }),
+  bug: (r) => ({ uuid: r.id, area: r.area, body: r.body, app_version: r.app_version, updated_at: r.updated_at }),
   call: (r) => ({
     uuid: r.id, direction: r.direction, number: r.number, client_uuid: r.client_id, contact_uuid: r.contact_id, client_name: r.client_name,
     contact_name: r.contact_name, started_at: r.started_at, duration_seconds: r.duration_seconds, updated_at: r.updated_at,
@@ -511,6 +522,8 @@ export class SyncEngine {
 
     if (kind === 'expense') cleaned = keepPendingBill(local, cleaned);
     if (kind === 'meeting') cleaned = keepPendingCheckin(local, cleaned);
+    // an office from before v1.19 sends no prospect link: it must not wipe the one the rep planned
+    if (kind === 'meeting' && !('prospect_uuid' in incoming) && local?.prospect_id) cleaned = { ...cleaned, prospect_id: local.prospect_id };
     // an office that does not know exact locations sends no such key: it must not wipe the spot the rep gave
     if (kind === 'client' && !('lat' in incoming) && local?.lat !== null && local?.lat !== undefined) cleaned = { ...cleaned, lat: local.lat, lng: local.lng, location_accuracy_m: local.location_accuracy_m, location_at: local.location_at, location_source: local.location_source };
     // an office that does not know "came through" yet sends no such key: it must not wipe what the rep chose (null sent on purpose does)

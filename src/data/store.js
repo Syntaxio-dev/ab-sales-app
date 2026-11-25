@@ -4,6 +4,8 @@ import * as enquiryRules from '../core/enquiry.js';
 import * as meetingRules from '../core/meeting.js';
 import * as leadRules from '../core/lead.js';
 import * as geo from '../core/geo.js';
+import * as prospectRules from '../core/prospect.js';
+import * as bugRules from '../core/bug.js';
 import { CLIENT_TYPE_IDS, withBrandDefaults, withGuideDefaults } from '../core/guide.js';
 import { PRESET_POSITIONS, cleanPosition, positionKey } from '../core/positions.js';
 import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/crypto.js';
@@ -18,7 +20,7 @@ import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/cr
 
 export class ValidationError extends Error {}
 
-const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', route: 'o:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', script: 's:', bill: 'b:', selfie: 'f:', tomb: 't:' };
+const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', route: 'o:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', script: 's:', prospect: 'x:', prospectnote: 'y:', bug: 'g:', bill: 'b:', selfie: 'f:', tomb: 't:' };
 const PROFILE_KEY = 'profile';
 const SYNC_KEY = 'sync';
 const PREFS_KEY = 'prefs';
@@ -26,8 +28,10 @@ const POSITIONS_KEY = 'positions';
 const GUIDE_KEY = 'guide'; // the product guide (written by the manager; this phone only reads it)
 const PROGRESS_KEY = 'guideprogress'; // the rep's own place in the guide: ticks, learned products, last client type (ids and booleans only)
 // the order the records are sent in: a client before the people at it
-const KINDS = ['expense', 'client', 'contact', 'meeting', 'route', 'enquiry', 'call', 'report', 'note', 'script'];
+const KINDS = ['expense', 'client', 'contact', 'meeting', 'route', 'enquiry', 'call', 'report', 'note', 'script', 'prospect', 'prospectnote', 'bug'];
 const MAX_NOTES_KEPT = 60; // requests for a guide note that were sent are kept as a short history
+const MAX_BUGS_KEPT = 30; // the same for bug reports
+const MAX_BUGS_WAITING = 20; // reports not sent yet: more than this is a stuck sync or a mistake, not a bug list
 
 // UPDATES KEEP THE DATA. Phones that already hold records get a newer app over the old one, so a newer version must be able
 // to read every record an older version wrote. The rules (the same idea as Prysm's normalize()):
@@ -40,7 +44,7 @@ const DEFAULTS = {
   client: { company: '', phone: '', city: '', notes: '', lat: null, lng: null, location_accuracy_m: null, location_at: null, location_source: null, assigned_to_code: null, assigned_to_name: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
   contact: { client_id: null, position: '', phone: '', email: '', notes: '', created_by_code: null, created_by_name: null, synced: false, sync_error: null },
   // status 'done' = an old meeting (written after it happened); the other new fields are for planned meetings and routes
-  meeting: { client_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, status: 'done', scheduled_at: null, ended_at: null, route_id: null, result: null, moved_from: null, time_manual: false, checkin_at: null, checkin_lat: null, checkin_lng: null, checkin_accuracy_m: null, checkin_distance_m: null, has_selfie: false, selfie_synced: false, synced: false, sync_error: null },
+  meeting: { client_id: null, prospect_id: null, contact_ids: [], purpose: '', discussion: '', outcome: '', next_followup_at: null, status: 'done', scheduled_at: null, ended_at: null, route_id: null, result: null, moved_from: null, time_manual: false, checkin_at: null, checkin_lat: null, checkin_lng: null, checkin_accuracy_m: null, checkin_distance_m: null, has_selfie: false, selfie_synced: false, synced: false, sync_error: null },
   route: { rep_id: null, date: '', title: '', area: '', start_time: '09:00', overnight: false, stops_order: [], synced: false, sync_error: null },
   call: { direction: 'outgoing', number: '', client_id: null, contact_id: null, client_name: '', contact_name: '', duration_seconds: 0, synced: false, sync_error: null },
   // lead_status / lead_remark / last_followup_at: the follow-up layer (v1.15); null status = an enquiry from before it, read as "New lead"
@@ -50,6 +54,12 @@ const DEFAULTS = {
   note: { product_id: null, product_name: '', body: '', synced: false, sync_error: null },
   // a rep's own pitch for a product (private to the rep, kept at the office so a new phone gets it back)
   script: { product_id: null, product_name: '', title: '', body: '', synced: false, sync_error: null },
+  // prospecting (v1.19): a company that does not work with us yet; the people at it travel inside the record
+  prospect: { name: '', territory: '', address: '', source: null, notes: '', people: [], created_by_code: null, created_by_name: null, synced: false, sync_error: null },
+  // one call to a prospect: what happened, what was said, when to call again. The newest one is the prospect's status. Anyone may add one.
+  prospectnote: { prospect_id: null, outcome: 'no_answer', remark: '', next_followup_at: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
+  // a rep's bug report to the office (sent once, never changed)
+  bug: { area: 'other', body: '', app_version: '', synced: false, sync_error: null },
 };
 
 const MAX_PEOPLE_PER_MEETING = 20;
@@ -60,7 +70,7 @@ const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up furthe
 const MUTATORS = [
   'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveContact', 'deleteContact', 'saveMeeting', 'deleteMeeting', 'saveRoute', 'deleteRoute',
   'saveEnquiry', 'saveLeadFollowup', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
-  'saveNote', 'setGuideFromServer', 'saveScript', 'deleteScript', 'tickGuideQuestion', 'resetGuideTicks', 'setGuideLearned', 'setGuideClientType',
+  'saveNote', 'saveProspect', 'deleteProspect', 'saveProspectNote', 'saveBug', 'setGuideFromServer', 'saveScript', 'deleteScript', 'tickGuideQuestion', 'resetGuideTicks', 'setGuideLearned', 'setGuideClientType',
   'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced', 'markSelfieSynced', 'saveSelfieFromServer',
   'putFromServer', 'removeFromServer', 'pruneAbsent', 'saveBillFromServer', 'wipeEverything',
 ];
@@ -111,6 +121,9 @@ export class Store {
   #calls = new Map();
   #notes = new Map();
   #scripts = new Map();
+  #prospects = new Map();
+  #prospectNotes = new Map();
+  #bugs = new Map();
   #progress = { learned: {}, ticks: {}, client_type: null };
   #guide = { version: null, products: [], brands: [] };
   #profile = null;
@@ -189,6 +202,9 @@ export class Store {
     this.#calls.clear();
     this.#notes.clear();
     this.#scripts.clear();
+    this.#prospects.clear();
+    this.#prospectNotes.clear();
+    this.#bugs.clear();
     this.#progress = { learned: {}, ticks: {}, client_type: null };
     this.#guide = { version: null, products: [], brands: [] };
     this.#profile = null;
@@ -926,6 +942,179 @@ export class Store {
     return record;
   }
 
+  // ---- prospecting: companies that do not work with us yet (one pool for the whole team) -----------------------------
+
+  get prospects() {
+    return [...this.#prospects.values()].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  }
+
+  prospectById(id) {
+    return (id && this.#prospects.get(id)) || null;
+  }
+
+  // Every call note of a prospect, newest first.
+  notesOf(prospectId) {
+    return [...this.#prospectNotes.values()].filter((n) => n.prospect_id === prospectId).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  // The status of EVERY prospect in one pass (a list of thousands must not look through all the notes once per row): Map id -> status.
+  prospectStatuses() {
+    const byProspect = new Map();
+    for (const note of this.#prospectNotes.values()) {
+      const list = byProspect.get(note.prospect_id);
+      if (list) list.push(note);
+      else byProspect.set(note.prospect_id, [note]);
+    }
+    return new Map([...this.#prospects.keys()].map((id) => [id, prospectRules.statusOf(byProspect.get(id) ?? [])]));
+  }
+
+  // Where this prospect stands (the newest call note decides): { outcome, label, note }
+  prospectStatus(prospectId) {
+    return prospectRules.statusOf(this.notesOf(prospectId));
+  }
+
+  // Who has this number already, among the prospects and the clients? -> "Rohit (JK Cement)" / "a client: JK Cement", or null.
+  // A prospect whose number is already a client's is refused: prospects are only for companies that do not work with us yet.
+  prospectNumberOwner(normalized, { exceptProspect = null } = {}) {
+    for (const prospect of this.#prospects.values()) {
+      if (prospect.id === exceptProspect) continue;
+      const person = prospect.people.find((p) => p.phone === normalized);
+      if (person) return person.name + ' (' + prospect.name + ')';
+    }
+    const client = this.numberOwner(normalized);
+    return client ? 'a client: ' + client : null;
+  }
+
+  // input: { id?, name, territory, address, source, notes, people: [{ name, position, phone, email, linkedin }] }
+  async saveProspect(input) {
+    const known = prospectRules.territories([...this.#prospects.values()]).map((t) => t.name);
+    const territory = prospectRules.canonicalTerritory(input.territory, known);
+    const people = Array.isArray(input.people) ? input.people : [];
+
+    check(
+      rules.businessName(input.name, { label: 'Company' }),
+      prospectRules.territoryProblem(territory),
+      rules.optional(input.address, { max: prospectRules.MAX_ADDRESS, label: 'Address' }),
+      input.source && !prospectRules.isSource(input.source) ? 'Pick where you found this company.' : null,
+      rules.optional(input.notes, { max: rules.MAX_NOTE, label: 'Notes' }),
+      prospectRules.peopleProblem(people),
+    );
+
+    const id = input.id ?? crypto.randomUUID();
+    const old = this.#prospects.get(id);
+    if (old && !this.canEdit(old)) throw new ValidationError('Only the rep who added this prospect can change its details. You can add your own calls to it.');
+
+    // one company once per territory, so two reps never work the same company
+    const nameKey = prospectRules.territoryKey(input.name);
+    const twin = [...this.#prospects.values()].find((p) => p.id !== id && prospectRules.territoryKey(p.name) === nameKey && prospectRules.territoryKey(p.territory) === prospectRules.territoryKey(territory));
+    if (twin) throw new ValidationError(twin.name + ' is already saved in ' + twin.territory + '. Open it and add your call there.');
+
+    const clean = people.map(prospectRules.cleanPerson);
+    for (const person of clean) {
+      const taken = person.phone ? this.prospectNumberOwner(person.phone, { exceptProspect: id }) : null;
+      if (taken) throw new ValidationError('The number of ' + person.name + ' is already saved under ' + taken + '.');
+    }
+
+    const record = {
+      id,
+      name: String(input.name).replace(/\s+/g, ' ').trim(),
+      territory,
+      address: String(input.address ?? '').trim(),
+      source: input.source || null,
+      notes: String(input.notes ?? '').trim(),
+      people: clean,
+      created_by_code: old ? old.created_by_code : (this.#profile?.employee_code ?? null),
+      created_by_name: old ? old.created_by_name : (this.#profile?.name ?? null),
+      synced: false,
+      sync_error: null,
+      created_at: old?.created_at ?? nowIso(),
+      updated_at: nowIso(),
+    };
+
+    await this.#write(PREFIX.prospect + id, record);
+    this.#prospects.set(id, record);
+    this.#changed();
+    return record;
+  }
+
+  // Only the rep who added it (the office checks again). Its call notes go with it.
+  async deleteProspect(id) {
+    const old = this.#prospects.get(id);
+    if (!old) return;
+    if (!this.canDelete(old)) throw new ValidationError('Only the rep who added this prospect, or your manager, can delete it.');
+
+    await this.#persist.del(PREFIX.prospect + id);
+    await this.#dropNotesOf(id);
+    this.#prospects.delete(id);
+    await this.#remember('prospect', id);
+    this.#changed();
+  }
+
+  async #dropNotesOf(prospectId) {
+    for (const note of this.notesOf(prospectId)) {
+      await this.#persist.del(PREFIX.prospectnote + note.id);
+      this.#prospectNotes.delete(note.id);
+    }
+  }
+
+  // One call to a prospect. ANY rep may add one (the details stay with the rep who added the prospect). It is a log: never edited.
+  // input: { prospect_id, outcome, remark, next_followup_at (ISO or null) }
+  async saveProspectNote(input) {
+    const prospect = this.#prospects.get(input.prospect_id);
+    if (!prospect) throw new ValidationError('This prospect is not on the phone any more.');
+    check(prospectRules.noteProblem(input));
+
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    const record = {
+      id,
+      prospect_id: prospect.id,
+      outcome: input.outcome,
+      remark: String(input.remark ?? '').trim(),
+      next_followup_at: input.next_followup_at ? new Date(input.next_followup_at).toISOString() : null,
+      created_by_code: this.#profile?.employee_code ?? null,
+      created_by_name: this.#profile?.name ?? null,
+      synced: false,
+      sync_error: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    await this.#write(PREFIX.prospectnote + id, record);
+    this.#prospectNotes.set(id, record);
+    this.#changed();
+    return record;
+  }
+
+  // ---- bug reports: a rep tells the office something went wrong -------------------------------------------------
+
+  // Newest first.
+  get bugs() {
+    return [...this.#bugs.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  // input: { area, body, app_version }
+  async saveBug(input) {
+    check(bugRules.bugProblem(input), rules.optional(input.app_version, { max: 30, label: 'Version' }));
+    if (this.dirty('bug').length >= MAX_BUGS_WAITING) throw new ValidationError('Many reports are still waiting to be sent. Connect to the office first, then report again.');
+
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    const record = { id, area: input.area, body: String(input.body).trim(), app_version: String(input.app_version ?? '').trim(), synced: false, sync_error: null, created_at: now, updated_at: now };
+
+    await this.#write(PREFIX.bug + id, record);
+    this.#bugs.set(id, record);
+
+    // a short history: the oldest reports that were already sent are forgotten
+    for (const old of this.bugs.filter((b) => b.synced).slice(MAX_BUGS_KEPT)) {
+      await this.#persist.del(PREFIX.bug + old.id);
+      this.#bugs.delete(old.id);
+    }
+
+    this.#changed();
+    return record;
+  }
+
   // ---- my scripts: the rep's own pitch for a product ----------------------------------------------
 
   // Newest first.
@@ -1135,6 +1324,8 @@ export class Store {
     const record = {
       id,
       client_id: input.client_id ?? null,
+      // the visit is to a PROSPECT (a company that is not a client yet): client_id stays empty, client_name is its name
+      prospect_id: typeof keep('prospect_id') === 'string' ? keep('prospect_id') : null,
       client_name: input.client_name.trim(),
       // the people met: only ids (the people themselves are in the pool), at most 20, no repeats
       contact_ids: [...new Set((input.contact_ids ?? []).filter((c) => typeof c === 'string'))].slice(0, MAX_PEOPLE_PER_MEETING),
@@ -1297,7 +1488,7 @@ export class Store {
   }
 
   #map(kind) {
-    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, route: this.#routes, enquiry: this.#enquiries, call: this.#calls, report: this.#reports, note: this.#notes, script: this.#scripts }[kind];
+    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, route: this.#routes, enquiry: this.#enquiries, call: this.#calls, report: this.#reports, note: this.#notes, script: this.#scripts, prospect: this.#prospects, prospectnote: this.#prospectNotes, bug: this.#bugs }[kind];
   }
 
   getRecord(kind, id) {
@@ -1357,6 +1548,7 @@ export class Store {
     await this.#persist.del(PREFIX[kind] + id);
     if (kind === 'expense') await this.#persist.del(PREFIX.bill + id);
     if (kind === 'meeting') await this.#persist.del(PREFIX.selfie + id);
+    if (kind === 'prospect') await this.#dropNotesOf(id);
     this.#map(kind).delete(id);
     if (kind === 'client' || kind === 'contact') this.#phoneIndex = null;
   }

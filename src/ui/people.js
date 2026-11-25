@@ -123,16 +123,16 @@ function openPersonView(app, person) {
 
 // A person at a client, or without one (client null: a customer who buys on their own; the company can be picked here).
 // `number` pre-fills the phone box (a number picked from the call history).
-export function openContactForm(app, { client = null, existing = null, number = '', onSaved = null }) {
+export function openContactForm(app, { client = null, existing = null, number = '', prefill = null, onSaved = null }) {
   const store = app.store;
   if (existing && !store.canEdit(existing)) return openPersonView(app, existing);
 
-  const startNumber = existing?.phone ?? number;
-  const name = field('Name', personInput({ value: existing?.name ?? '' }));
-  const position = positionField(app, existing?.position ?? '');
+  const startNumber = existing?.phone ?? (number || prefill?.phone) ?? '';
+  const name = field('Name', personInput({ value: existing?.name ?? prefill?.name ?? '' }));
+  const position = positionField(app, existing?.position ?? prefill?.position ?? '');
   // a mobile number, unless the number that is already there is a landline (an old record, or one picked from the call history)
   const phone = phoneField('Phone number (optional)', { value: startNumber, landline: Boolean(startNumber) && !/^\+91[6-9]/.test(startNumber), hint: 'Calls with this number are matched to this person.' });
-  const email = field('E-mail (optional)', emailInput({ value: existing?.email ?? '' }));
+  const email = field('E-mail (optional)', emailInput({ value: existing?.email ?? prefill?.email ?? '' }));
   const notes = field('Notes (optional)', h('textarea', { class: 'input', maxLength: rules.MAX_NOTE, rows: 3, value: existing?.notes ?? '' }));
 
   // opened from a client: the company is fixed. Opened on its own: the rep may pick one, or leave it empty.

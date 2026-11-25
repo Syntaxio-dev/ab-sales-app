@@ -5,11 +5,14 @@
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const error = (status, code, message, errors = {}) => json(status, { code, message, errors });
 
-const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'calls', 'reports', 'product_requests', 'scripts'];
-const NOT_PULLED = new Set(['product_requests']); // a rep's request for a guide note only goes to the office
+const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'calls', 'reports', 'product_requests', 'scripts', 'prospects', 'prospect_notes', 'bug_reports'];
+const NOT_PULLED = new Set(['product_requests', 'bug_reports']); // a rep's request for a guide note only goes to the office
 const STATUSES = ['qualification', 'need_analysis', 'proposal', 'negotiation', 'won', 'lost'];
-const SHARED = new Set(['clients', 'contacts']);
-const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'scripts'];
+const SHARED = new Set(['clients', 'contacts', 'prospects', 'prospect_notes']);
+const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'scripts', 'prospects'];
+const LOGS = new Set(['calls', 'product_requests', 'prospect_notes', 'bug_reports']); // sent once, never changed
+const OUTCOMES = ['no_answer', 'call_back', 'interested', 'meeting_fixed', 'not_interested', 'wrong_number', 'do_not_call', 'converted'];
+const BUG_AREAS = ['expenses', 'clients', 'prospects', 'leads', 'meetings', 'guide', 'calls', 'sync', 'other'];
 const MEETING_STATUSES = ['planned', 'done', 'missed', 'moved'];
 const MEETING_FIELDS = ['status', 'scheduled_at', 'ended_at', 'route_uuid', 'result', 'moved_from', 'time_manual'];
 const SOURCES = ['call', 'walkin', 'whatsapp', 'reference'];
@@ -155,6 +158,16 @@ export class FakeOffice {
     return numbers;
   }
 
+  // the numbers of the people at the prospects (the same spelling the phones send)
+  prospectNumbers(exceptUuid = null) {
+    const numbers = new Map();
+    for (const row of this.rows.prospects.values()) {
+      if (row.deleted || row.data.uuid === exceptUuid) continue;
+      for (const p of row.data.people ?? []) if (p.phone) numbers.set(p.phone, p.name + ' (' + row.data.name + ')');
+    }
+    return numbers;
+  }
+
   validate(kind, r) {
     if (typeof r?.uuid !== 'string' || !/^[0-9a-f-]{36}$/i.test(r.uuid)) return 'The id is not valid.';
     if (Date.parse(r.updated_at) > Date.now() + 10 * 60_000) return "This phone's clock is ahead of the office's. Set the right date and time on the phone.";
@@ -188,6 +201,33 @@ export class FakeOffice {
       if (!Array.isArray(r.items) || r.items.length < 1 || r.items.length > 10) return 'An enquiry needs 1 to 10 products.';
       if (r.items.some((i) => String(i?.product ?? '').trim().length < 2 || !Number.isInteger(i?.quantity) || i.quantity < 1)) return 'A product is not valid.';
       if (!Array.isArray(r.timeline ?? []) || (r.timeline ?? []).length > 100) return 'The notes are not valid.';
+    }
+    if (kind === 'prospects') {
+      if (String(r.name ?? '').trim().length < 2 || String(r.territory ?? '').trim().length < 2) return 'The company and the territory are required.';
+      if (!Array.isArray(r.people ?? []) || (r.people ?? []).length > 10) return 'The people are not valid.';
+      const seen = new Set();
+      for (const p of r.people ?? []) {
+        if (String(p?.name ?? '').trim().length < 2) return 'A person needs a name.';
+        if (p.linkedin && !/^https:\/\/([a-z0-9-]+\.)?linkedin\.com\//i.test(p.linkedin)) return 'The LinkedIn address is not valid.';
+        if (p.phone) {
+          if (seen.has(p.phone)) return 'Two people have the same number.';
+          seen.add(p.phone);
+          const taken = this.prospectNumbers(r.uuid).get(p.phone) ?? this.poolNumbers().get(p.phone);
+          if (taken) return 'This number is already saved under ' + taken + '.';
+        }
+      }
+      const twin = [...this.rows.prospects.values()].find((x) => !x.deleted && x.data.uuid !== r.uuid && x.data.name.trim().toLowerCase() === r.name.trim().toLowerCase() && x.data.territory.trim().toLowerCase() === r.territory.trim().toLowerCase());
+      if (twin) return 'This company is already saved in this territory.';
+    }
+    if (kind === 'prospect_notes') {
+      if (!OUTCOMES.includes(r.outcome)) return 'The outcome is not valid.';
+      if (String(r.remark ?? '').length > 300) return 'The remark is too long.';
+      const prospect = this.rows.prospects.get(r.prospect_uuid);
+      if (!prospect || prospect.deleted) return 'This prospect is not known.';
+    }
+    if (kind === 'bug_reports') {
+      if (!BUG_AREAS.includes(r.area)) return 'The place is not valid.';
+      if (String(r.body ?? '').trim().length < 10 || String(r.body).length > 1000) return 'The report is too short or too long.';
     }
     if (kind === 'reports') {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(r.report_date ?? '')) return 'The day is not valid.';
@@ -227,7 +267,7 @@ export class FakeOffice {
         if (row?.deleted) { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
         // the pool is shared to read; only the rep who added a client or a person changes it
         if (row && shared && row.owner !== userId) { results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'NOT_ALLOWED', message: 'Only the person who added it can change this.' }); continue; }
-        if (row && (kind === 'calls' || kind === 'product_requests')) { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
+        if (row && LOGS.has(kind)) { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
         if (kind === 'product_requests' && !(String(r.body ?? '').trim().length >= 3 && String(r.product_name ?? '').trim().length >= 2)) {
           results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'INVALID', message: 'The request is too short.' });
           continue;
@@ -287,7 +327,7 @@ export class FakeOffice {
       const client = this.rows.clients.get(row.data.client_uuid)?.data;
       out.checkin_distance_m = client && client.lat != null ? haversine(client, { lat: row.data.checkin_lat, lng: row.data.checkin_lng }) : null; // the office works it out itself
     }
-    if (kind === 'clients' || kind === 'contacts') {
+    if (kind === 'clients' || kind === 'contacts' || kind === 'prospects' || kind === 'prospect_notes') {
       const added = this.userById(row.owner);
       Object.assign(out, { created_by_code: added?.code ?? null, created_by_name: added?.name ?? null });
     }
@@ -304,7 +344,7 @@ export class FakeOffice {
     let capped = null;
 
     for (const kind of KINDS.filter((k) => !NOT_PULLED.has(k) && !(k === 'routes' && this.ignoresPlanning))) {
-      const rows = [...this.rows[kind].values()].filter((r) => (SHARED.has(kind) ? this.canSee(kind, r, userId) : r.owner === userId) && r.rev >= from).sort((a, b) => a.rev - b.rev);
+      const rows = [...this.rows[kind].values()].filter((r) => (SHARED.has(kind) ? this.canSee(kind, r, userId) : r.owner === userId) && r.rev >= from && !(kind === 'prospect_notes' && this.rows.prospects.get(r.data.prospect_uuid)?.deleted)).sort((a, b) => a.rev - b.rev);
       const page = rows.slice(0, this.limit);
       if (rows.length > this.limit) { capped = Math.min(capped ?? Infinity, page.at(-1).rev); out.has_more = true; }
       out[kind] = page.map((r) => this.shape(kind, r));

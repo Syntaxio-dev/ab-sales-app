@@ -11,6 +11,7 @@ import { capitalize, dayLabel, dayString, formatHeadDay, formatTime, initials, p
 import { officeCard } from './office.js';
 import { empty, fill, head } from './parts.js';
 import { openContactForm } from './people.js';
+import { modeSwitch, prospectMode, renderProspects, resetProspectView } from './prospects.js';
 import { openSettings } from './settings.js';
 
 // The four main screens. Each one fills the scrolling view; `ctx` gives them goTab(id) and fab(label, onclick).
@@ -189,10 +190,13 @@ export function resetTabViews() {
   clientPlace = '';
   expenseFilter = 'all';
   resetMeetingView();
+  resetProspectView();
 }
 
 export function renderClients(container, app, ctx) {
   const store = app.store;
+  // the switch under the title: companies that work with us, or prospects (companies we want to win), see ui/prospects.js
+  if (prospectMode()) return renderProspects(container, app, ctx, () => renderClients(container, app, ctx));
   const all = store.clients;
   const alone = store.loosePeople; // people without a company
   const me = store.profile?.employee_code;
@@ -282,7 +286,7 @@ export function renderClients(container, app, ctx) {
   draw();
   fill(container,
     head({ eyebrow: `${all.length} ${all.length === 1 ? 'company' : 'companies'}${alone.length ? ` · ${alone.length} ${peopleWord} on their own` : ''}`, title: 'Clients' }),
-    any ? h('div', { class: 'client-tools' }, filters, search, places.length > 1 && clientScope !== 'people' ? placeSelect : null) : null,
+    h('div', { class: 'client-tools' }, modeSwitch(() => renderClients(container, app, ctx)), any ? filters : null, any ? search : null, any && places.length > 1 && clientScope !== 'people' ? placeSelect : null),
     any ? list : empty('users', 'No clients yet', 'Save the companies you deal with and the people who work there. Everybody on the team sees them.'),
   );
   ctx.fab('Add client', () => openClientForm(app), { label: 'Add contact person', onclick: () => openContactForm(app, { client: null }) });

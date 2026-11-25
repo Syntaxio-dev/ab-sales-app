@@ -43,11 +43,11 @@ export const placeInput = (props = {}) => restrict(h('input', { ...textProps, ma
 export const RAJASTHAN_CITIES = ['Jaipur', 'Jodhpur', 'Udaipur', 'Kota', 'Ajmer', 'Bikaner', 'Bhilwara', 'Alwar', 'Sikar', 'Bhiwadi', 'Neemrana', 'Pali'];
 
 /** Quick-pick chips for a Place box: a tap fills the box, typing something else clears the highlight. */
-export function cityPicks(input) {
-  const el = h('div', { class: 'chips quick-picks', role: 'group', 'aria-label': 'Quick picks for the place' });
+export function cityPicks(input, list = RAJASTHAN_CITIES, label = 'Quick picks for the place') {
+  const el = h('div', { class: 'chips quick-picks', role: 'group', 'aria-label': label });
   const same = (a, b) => a.trim().toLowerCase() === b.toLowerCase();
 
-  const draw = () => el.replaceChildren(...RAJASTHAN_CITIES.map((city) => h('button', {
+  const draw = () => el.replaceChildren(...list.map((city) => h('button', {
     class: 'filter', type: 'button', 'aria-pressed': String(same(input.value, city)),
     onclick() {
       input.value = city;

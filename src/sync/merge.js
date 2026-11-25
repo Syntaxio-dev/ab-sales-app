@@ -5,6 +5,7 @@ import { isLeadStatus, MAX_REMARK } from '../core/lead.js';
 import { RESULTS, STATUSES as MEETING_STATUSES, validStartTime } from '../core/meeting.js';
 import * as rules from '../core/rules.js';
 import * as geo from '../core/geo.js';
+import { MAX_PEOPLE, MAX_REMARK as MAX_PROSPECT_REMARK, cleanLinkedin, isOutcome, isSource as isProspectSource } from '../core/prospect.js';
 
 // What the office sends back is NOT trusted blindly: every record is checked with the same rules as a record typed on the phone
 // before it is stored (wrong types, huge texts, impossible dates are dropped). The screens also only ever show text as text.
@@ -226,6 +227,7 @@ export function cleanMeeting(r) {
     id: r.uuid,
     client_id: typeof r.client_uuid === 'string' && UUID.test(r.client_uuid) ? r.client_uuid : null,
     client_name: name,
+    prospect_id: typeof r.prospect_uuid === 'string' && UUID.test(r.prospect_uuid) ? r.prospect_uuid : null,
     contact_ids: Array.isArray(r.contact_uuids) ? r.contact_uuids.filter((c) => typeof c === 'string' && UUID.test(c)).slice(0, 20) : [],
     meeting_at: at,
     purpose: text(r.purpose, rules.MAX_TEXT),
@@ -279,6 +281,59 @@ export function cleanRoute(r) {
     stops_order: order,
     created_at: updated,
     updated_at: updated,
+  };
+}
+
+// A prospect of the shared pool (v1.19). People who break a rule are dropped one by one; the company stays.
+export function cleanProspect(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const updated = moment(r.updated_at);
+  const name = text(r.name, 150);
+  const territory = text(r.territory, 100);
+  if (!updated || name.length < 2 || territory.length < 2) return null;
+
+  const people = (Array.isArray(r.people) ? r.people : []).slice(0, MAX_PEOPLE).map((p) => ({
+    name: text(p?.name, 150),
+    position: text(p?.position, 100),
+    phone: normalizePhone(text(p?.phone, 30)) ?? '',
+    email: text(p?.email, 150),
+    linkedin: cleanLinkedin(p?.linkedin) || '',
+  })).filter((p) => p.name.length >= 2);
+
+  return {
+    id: r.uuid,
+    name,
+    territory,
+    address: text(r.address, 200),
+    source: isProspectSource(r.source) ? r.source : null,
+    notes: text(r.notes, rules.MAX_NOTE),
+    people,
+    created_by_code: r.created_by_code ? text(r.created_by_code, 30) : '', // '' = added by the office (not a rep)
+    created_by_name: r.created_by_name ? text(r.created_by_name, 100) : null,
+    created_at: updated,
+    updated_at: updated,
+  };
+}
+
+// One call to a prospect, made by any rep. The office never changes one.
+export function cleanProspectNote(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const created = moment(r.created_at) ?? moment(r.updated_at);
+  const prospect = typeof r.prospect_uuid === 'string' && UUID.test(r.prospect_uuid) ? r.prospect_uuid : null;
+  if (!created || !prospect || !isOutcome(r.outcome)) return null;
+
+  return {
+    id: r.uuid,
+    prospect_id: prospect,
+    outcome: r.outcome,
+    remark: text(r.remark, MAX_PROSPECT_REMARK),
+    next_followup_at: r.next_followup_at ? moment(r.next_followup_at) : null,
+    created_by_code: r.created_by_code ? text(r.created_by_code, 30) : '',
+    created_by_name: r.created_by_name ? text(r.created_by_name, 100) : null,
+    created_at: created,
+    updated_at: moment(r.updated_at) ?? created,
   };
 }
 
@@ -402,7 +457,7 @@ export function cleanGuide(answer) {
 }
 
 // A request for a guide note only ever goes from the phone to the office: nothing comes back to be merged.
-export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, route: cleanRoute, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null, script: cleanScript };
+export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, route: cleanRoute, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null, script: cleanScript, prospect: cleanProspect, prospectnote: cleanProspectNote, bug: () => null };
 
 // What to do with a record the office sent, given what the phone has:
 //  'create'  the phone does not have it (a new phone, or a restore)
@@ -413,7 +468,7 @@ export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: c
 export function decide(kind, local, server) {
   if (!local) return 'create';
   if (kind === 'expense' && server.status !== 'pending') return 'replace';
-  if (kind === 'call') return 'keep'; // a call never changes
+  if (kind === 'call' || kind === 'prospectnote') return 'keep'; // a call never changes
   if (!local.synced) return 'keep';
 
   return Date.parse(server.updated_at) > Date.parse(local.updated_at) ? 'replace' : 'keep';

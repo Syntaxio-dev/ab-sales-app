@@ -14,6 +14,7 @@ import { checkinChip, readSpot, takeSelfie } from './location.js';
 import { openSchedule } from './meeting-schedule.js';
 import { dateTimeInput } from './pickers.js';
 import { openContactForm } from './people.js';
+import { openProspectPage } from './prospects.js';
 import { shortDay, whenChips } from './when-chips.js';
 
 // "After the visit": what happened at a meeting (Done, Missed or Move), the result, a note and the follow-up. Also the page that writes up
@@ -88,15 +89,16 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
     const route = m.route_id ? store.routeById(m.route_id) : null;
     const stop = route ? store.routeStops(route.id).findIndex((s) => s.id === m.id) + 1 : 0;
     const at = timeOf(m);
-    const phone = client()?.phone || store.contactsOf(m.client_id ?? '').find((p) => p.phone)?.phone || '';
+    const phone = client()?.phone || store.contactsOf(m.client_id ?? '').find((p) => p.phone)?.phone || store.prospectById(m.prospect_id)?.people.find((p) => p.phone)?.phone || '';
 
-    top.replaceChildren(
+    top.replaceChildren(...[
       h('div', { class: 'visit-tags' },
         h('span', { class: `chip ${isOpen(m) && at < new Date() ? 'late' : 'today'}` }, icon('alarm', 12), `${dayWord(at)} ${formatTime(at)}`),
         route ? h('span', { class: 'chip' }, icon('route', 12), `${route.title}${stop ? ` · stop ${stop}` : ''}`) : null,
         status === 'moved' ? h('span', { class: 'chip' }, 'Moved') : null,
         isOpen(m) ? h('button', { type: 'button', class: 'link visit-edit', onclick: () => openSchedule(app, { existing: store.meetingById(m.id) }) }, icon('edit', 14), 'Edit') : null),
-      phone ? h('a', { class: 'btn block visit-call', href: `tel:${phone}` }, icon('phone', 18), 'Call') : null);
+      phone ? h('a', { class: 'btn block visit-call', href: `tel:${phone}` }, icon('phone', 18), 'Call') : null,
+    ].filter(Boolean)); // an empty part would print the word "null"
   }
 
   // ---- log mode: which client and when ------------------------------------------------------------------------------
@@ -358,6 +360,8 @@ export function openVisit(app, id, { log = false, client_id: presetClient = null
     onClose() { stop(); if (selfieUrl) URL.revokeObjectURL(selfieUrl); },
     body: h('div', { class: 'stack sched' },
       top,
+      // a visit planned to a prospect: one tap to its page (people, calls, make it a client)
+      m?.prospect_id && store.prospectById(m.prospect_id) ? h('button', { type: 'button', class: 'btn small-btn block', onclick: () => openProspectPage(app, m.prospect_id) }, icon('users', 18), 'Open prospect') : null,
       ...(log ? [h('div', null, h('p', { class: 'eyebrow' }, 'Client'), clientSlot.el), logSlot.el] : [answerSlot.el]),
       checkinSlot.el,
       moveSlot.el,
