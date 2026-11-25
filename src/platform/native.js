@@ -8,7 +8,7 @@ import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
-import { fromBase64 } from '../security/crypto.js';
+import { fromBase64, toBase64 } from '../security/crypto.js';
 
 // The phone: the Android Keystore backed secret store, SQLite for the (already encrypted) records,
 // the system camera / photo picker, and the system share sheet.
@@ -176,6 +176,14 @@ export async function createNativePlatform() {
     async shareFile(name, text, mime) {
       const written = await Filesystem.writeFile({ path: `${EXPORT_DIR}/${name}`, data: text, directory: Directory.Cache, encoding: Encoding.UTF8, recursive: true });
       await Share.share({ title: name, dialogTitle: 'Share file', files: [written.uri] });
+    },
+
+    // A file that arrived from the office (a task's PDF, Excel, Word file): written to the private cache as it is (binary) and handed to the share
+    // sheet, so the rep opens it with the phone's own app. Removed on the next lock/start, like an export.
+    async shareBytes(name, bytes) {
+      const safe = String(name).replace(/[^A-Za-z0-9._ -]/g, '_').slice(0, 100) || 'file';
+      const written = await Filesystem.writeFile({ path: EXPORT_DIR + '/' + safe, data: toBase64(bytes), directory: Directory.Cache, recursive: true });
+      await Share.share({ title: safe, dialogTitle: 'Open file', files: [written.uri] });
     },
 
     async cleanExports() {

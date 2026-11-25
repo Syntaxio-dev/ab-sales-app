@@ -6,6 +6,7 @@ import * as leadRules from '../core/lead.js';
 import * as geo from '../core/geo.js';
 import * as prospectRules from '../core/prospect.js';
 import * as bugRules from '../core/bug.js';
+import * as workRules from '../core/mywork.js';
 import { CLIENT_TYPE_IDS, withBrandDefaults, withGuideDefaults } from '../core/guide.js';
 import { PRESET_POSITIONS, cleanPosition, positionKey } from '../core/positions.js';
 import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/crypto.js';
@@ -20,7 +21,7 @@ import { fromBase64, fromUtf8, open, seal, toBase64, utf8 } from '../security/cr
 
 export class ValidationError extends Error {}
 
-const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', route: 'o:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', script: 's:', prospect: 'x:', prospectnote: 'y:', bug: 'g:', bill: 'b:', selfie: 'f:', tomb: 't:' };
+const PREFIX = { expense: 'e:', client: 'c:', contact: 'p:', meeting: 'm:', route: 'o:', enquiry: 'q:', call: 'l:', report: 'r:', note: 'n:', script: 's:', prospect: 'x:', prospectnote: 'y:', bug: 'g:', todo: 'k:', memo: 'u:', task: 'w:', taskfile: 'd:', bill: 'b:', selfie: 'f:', tomb: 't:' };
 const PROFILE_KEY = 'profile';
 const SYNC_KEY = 'sync';
 const PREFS_KEY = 'prefs';
@@ -28,7 +29,7 @@ const POSITIONS_KEY = 'positions';
 const GUIDE_KEY = 'guide'; // the product guide (written by the manager; this phone only reads it)
 const PROGRESS_KEY = 'guideprogress'; // the rep's own place in the guide: ticks, learned products, last client type (ids and booleans only)
 // the order the records are sent in: a client before the people at it
-const KINDS = ['expense', 'client', 'contact', 'meeting', 'route', 'enquiry', 'call', 'report', 'note', 'script', 'prospect', 'prospectnote', 'bug'];
+const KINDS = ['expense', 'client', 'contact', 'meeting', 'route', 'enquiry', 'call', 'report', 'note', 'script', 'prospect', 'prospectnote', 'bug', 'todo', 'memo', 'task'];
 const MAX_NOTES_KEPT = 60; // requests for a guide note that were sent are kept as a short history
 const MAX_BUGS_KEPT = 30; // the same for bug reports
 const MAX_BUGS_WAITING = 20; // reports not sent yet: more than this is a stuck sync or a mistake, not a bug list
@@ -60,6 +61,11 @@ const DEFAULTS = {
   prospectnote: { prospect_id: null, outcome: 'no_answer', remark: '', next_followup_at: null, created_by_code: null, created_by_name: null, synced: false, sync_error: null },
   // a rep's bug report to the office (sent once, never changed)
   bug: { area: 'other', body: '', app_version: '', synced: false, sync_error: null },
+  // v1.20: the rep's own to-do list and notes (private; kept at the office only so a new phone gets them back)
+  todo: { title: '', done: false, done_at: null, due_date: null, synced: false, sync_error: null },
+  memo: { title: '', body: '', synced: false, sync_error: null },
+  // a task from the manager: everything but status / rep_note / rep_updated_at is the office's (it arrives, it is never sent back)
+  task: { title: '', description: '', send_to_email: '', due_at: null, priority: 'normal', status: 'new', rep_note: '', rep_updated_at: null, assigned_by_name: '', version: 0, files: [], synced: true, sync_error: null },
 };
 
 const MAX_PEOPLE_PER_MEETING = 20;
@@ -70,7 +76,7 @@ const TWO_YEARS = 2 * 365 * 86_400_000; // the office refuses a follow-up furthe
 const MUTATORS = [
   'saveProfile', 'saveExpense', 'deleteExpense', 'saveClient', 'deleteClient', 'saveContact', 'deleteContact', 'saveMeeting', 'deleteMeeting', 'saveRoute', 'deleteRoute',
   'saveEnquiry', 'saveLeadFollowup', 'deleteEnquiry', 'saveReport', 'saveCalls', 'savePrefs', 'addPosition', 'setPositionsFromServer', 'clearPendingPositions',
-  'saveNote', 'saveProspect', 'deleteProspect', 'saveProspectNote', 'saveBug', 'setGuideFromServer', 'saveScript', 'deleteScript', 'tickGuideQuestion', 'resetGuideTicks', 'setGuideLearned', 'setGuideClientType',
+  'saveNote', 'saveTodo', 'setTodoDone', 'deleteTodo', 'saveMemo', 'deleteMemo', 'saveTaskUpdate', 'saveTaskFileFromServer', 'saveProspect', 'deleteProspect', 'saveProspectNote', 'saveBug', 'setGuideFromServer', 'saveScript', 'deleteScript', 'tickGuideQuestion', 'resetGuideTicks', 'setGuideLearned', 'setGuideClientType',
   'saveSyncState', 'clearTombstone', 'markSynced', 'markRefused', 'markBillSynced', 'markSelfieSynced', 'saveSelfieFromServer',
   'putFromServer', 'removeFromServer', 'pruneAbsent', 'saveBillFromServer', 'wipeEverything',
 ];
@@ -124,6 +130,9 @@ export class Store {
   #prospects = new Map();
   #prospectNotes = new Map();
   #bugs = new Map();
+  #todos = new Map();
+  #memos = new Map();
+  #tasks = new Map();
   #progress = { learned: {}, ticks: {}, client_type: null };
   #guide = { version: null, products: [], brands: [] };
   #profile = null;
@@ -205,6 +214,9 @@ export class Store {
     this.#prospects.clear();
     this.#prospectNotes.clear();
     this.#bugs.clear();
+    this.#todos.clear();
+    this.#memos.clear();
+    this.#tasks.clear();
     this.#progress = { learned: {}, ticks: {}, client_type: null };
     this.#guide = { version: null, products: [], brands: [] };
     this.#profile = null;
@@ -1115,6 +1127,123 @@ export class Store {
     return record;
   }
 
+  // ---- to-do: the rep's own list (private) --------------------------------------------------------------------------------
+
+  get todos() {
+    return [...this.#todos.values()];
+  }
+
+  // input: { id?, title, due_date: 'YYYY-MM-DD' | null }
+  async saveTodo(input) {
+    check(workRules.todoProblem(input));
+    const id = input.id ?? crypto.randomUUID();
+    const old = this.#todos.get(id);
+    if (!old && this.todos.filter((t) => !t.done).length >= workRules.MAX_OPEN_TODOS) throw new ValidationError('That is a lot of open to-dos. Finish or delete some first.');
+
+    const now = nowIso();
+    const record = {
+      id, title: String(input.title).replace(/\s+/g, ' ').trim(), done: old?.done ?? false, done_at: old?.done_at ?? null, due_date: input.due_date || null,
+      synced: false, sync_error: null, created_at: old?.created_at ?? now, updated_at: now,
+    };
+    await this.#write(PREFIX.todo + id, record);
+    this.#todos.set(id, record);
+    this.#changed();
+    return record;
+  }
+
+  async setTodoDone(id, done) {
+    const old = this.#todos.get(id);
+    if (!old) return null;
+
+    const now = nowIso();
+    const record = { ...old, done: Boolean(done), done_at: done ? now : null, synced: false, sync_error: null, updated_at: now };
+    await this.#write(PREFIX.todo + id, record);
+    this.#todos.set(id, record);
+    this.#changed();
+    return record;
+  }
+
+  async deleteTodo(id) {
+    await this.#persist.del(PREFIX.todo + id);
+    this.#todos.delete(id);
+    await this.#remember('todo', id);
+    this.#changed();
+  }
+
+  // ---- notes: the rep's own (private) --------------------------------------------------------------------------------------
+
+  // The newest change first.
+  get memos() {
+    return [...this.#memos.values()].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  }
+
+  memoById(id) {
+    return (id && this.#memos.get(id)) || null;
+  }
+
+  // input: { id?, title, body }
+  async saveMemo(input) {
+    check(workRules.memoProblem(input));
+    const id = input.id ?? crypto.randomUUID();
+    const old = this.#memos.get(id);
+    if (!old && this.#memos.size >= workRules.MAX_MEMOS) throw new ValidationError('That is a lot of notes. Delete some first.');
+
+    const now = nowIso();
+    const record = { id, title: String(input.title ?? '').replace(/\s+/g, ' ').trim(), body: String(input.body).trim(), synced: false, sync_error: null, created_at: old?.created_at ?? now, updated_at: now };
+    await this.#write(PREFIX.memo + id, record);
+    this.#memos.set(id, record);
+    this.#changed();
+    return record;
+  }
+
+  async deleteMemo(id) {
+    await this.#persist.del(PREFIX.memo + id);
+    this.#memos.delete(id);
+    await this.#remember('memo', id);
+    this.#changed();
+  }
+
+  // ---- tasks from the manager ---------------------------------------------------------------------------------------------------
+
+  get tasks() {
+    return [...this.#tasks.values()];
+  }
+
+  taskById(id) {
+    return (id && this.#tasks.get(id)) || null;
+  }
+
+  // The rep moves a task on: input { id, status ('in_progress' | 'done' | 'blocked'), note }. Only these two fields ever go back to the office.
+  async saveTaskUpdate(input) {
+    const old = this.#tasks.get(input.id);
+    if (!old) throw new ValidationError('This task is not on the phone any more.');
+    check(workRules.taskUpdateProblem(input, old));
+
+    const now = nowIso();
+    const record = { ...old, status: input.status, rep_note: String(input.note ?? '').trim(), rep_updated_at: now, synced: false, sync_error: null, updated_at: now };
+    await this.#write(PREFIX.task + record.id, record);
+    this.#tasks.set(record.id, record);
+    this.#changed();
+    return record;
+  }
+
+  // The bytes of a file of a task (encrypted like a bill photo): null when it was not downloaded yet.
+  async taskFileFor(taskId, fileId) {
+    return this.#readBytes(PREFIX.taskfile + taskId + ':' + fileId);
+  }
+
+  async hasTaskFile(taskId, fileId) {
+    this.#assertOpen();
+    return (await this.#persist.get(PREFIX.taskfile + taskId + ':' + fileId)) !== null;
+  }
+
+  async saveTaskFileFromServer(taskId, fileId, bytes) {
+    const task = this.#tasks.get(taskId);
+    if (!task || !task.files.some((f) => f.id === fileId)) return;
+    await this.#writeBytes(PREFIX.taskfile + taskId + ':' + fileId, bytes);
+    this.#changed(false);
+  }
+
   // ---- my scripts: the rep's own pitch for a product ----------------------------------------------
 
   // Newest first.
@@ -1488,7 +1617,7 @@ export class Store {
   }
 
   #map(kind) {
-    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, route: this.#routes, enquiry: this.#enquiries, call: this.#calls, report: this.#reports, note: this.#notes, script: this.#scripts, prospect: this.#prospects, prospectnote: this.#prospectNotes, bug: this.#bugs }[kind];
+    return { expense: this.#expenses, client: this.#clients, contact: this.#contacts, meeting: this.#meetings, route: this.#routes, enquiry: this.#enquiries, call: this.#calls, report: this.#reports, note: this.#notes, script: this.#scripts, prospect: this.#prospects, prospectnote: this.#prospectNotes, bug: this.#bugs, todo: this.#todos, memo: this.#memos, task: this.#tasks }[kind];
   }
 
   getRecord(kind, id) {
@@ -1533,8 +1662,8 @@ export class Store {
   }
 
   // A record that came FROM the office (already checked by src/sync/merge.js): stored as "sent".
-  async putFromServer(kind, record, bill = null) {
-    await this.#put(kind, { ...DEFAULTS[kind], ...(kind === 'enquiry' ? enquiryRules.normalizeEnquiry(record) : record), synced: true, sync_error: null });
+  async putFromServer(kind, record, bill = null, unsynced = false) {
+    await this.#put(kind, { ...DEFAULTS[kind], ...(kind === 'enquiry' ? enquiryRules.normalizeEnquiry(record) : record), synced: !unsynced, sync_error: null });
     if (bill) await this.#writeBytes(PREFIX.bill + record.id, bill);
   }
 
@@ -1549,6 +1678,7 @@ export class Store {
     if (kind === 'expense') await this.#persist.del(PREFIX.bill + id);
     if (kind === 'meeting') await this.#persist.del(PREFIX.selfie + id);
     if (kind === 'prospect') await this.#dropNotesOf(id);
+    if (kind === 'task') for (const file of this.#tasks.get(id)?.files ?? []) await this.#persist.del(PREFIX.taskfile + id + ':' + file.id);
     this.#map(kind).delete(id);
     if (kind === 'client' || kind === 'contact') this.#phoneIndex = null;
   }

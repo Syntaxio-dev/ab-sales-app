@@ -32,7 +32,12 @@ export const KINDS = [
   { kind: 'prospect', wire: 'prospects', optional: true }, // the shared prospecting pool
   { kind: 'prospectnote', wire: 'prospect_notes', log: true, optional: true }, // a call to a prospect: sent once, never changed or deleted
   { kind: 'bug', wire: 'bug_reports', log: true, optional: true }, // a rep's bug report: only ever sent
+  // v1.20: the rep's private to-do list and notes (come back on a new phone), and the tasks of the manager (they come down; only status and note go up)
+  { kind: 'todo', wire: 'todos', optional: true },
+  { kind: 'memo', wire: 'memos', optional: true },
+  { kind: 'task', wire: 'tasks', log: true, optional: true },
 ];
+const TASK_FILES_PER_RUN = 6;
 
 const wireOf = {
   expense: (r) => ({
@@ -79,6 +84,9 @@ const wireOf = {
   }),
   prospectnote: (r) => ({ uuid: r.id, prospect_uuid: r.prospect_id, outcome: r.outcome, remark: r.remark, next_followup_at: r.next_followup_at, updated_at: r.updated_at, created_at: r.created_at }),
   bug: (r) => ({ uuid: r.id, area: r.area, body: r.body, app_version: r.app_version, updated_at: r.updated_at }),
+  todo: (r) => ({ uuid: r.id, title: r.title, done: r.done, done_at: r.done_at, due_date: r.due_date, updated_at: r.updated_at }),
+  memo: (r) => ({ uuid: r.id, title: r.title, body: r.body, updated_at: r.updated_at }),
+  task: (r) => ({ uuid: r.id, status: r.status, rep_note: r.rep_note, rep_updated_at: r.rep_updated_at, updated_at: r.updated_at }), // nothing else of a task is ever sent
   call: (r) => ({
     uuid: r.id, direction: r.direction, number: r.number, client_uuid: r.client_id, contact_uuid: r.contact_id, client_name: r.client_name,
     contact_name: r.contact_name, started_at: r.started_at, duration_seconds: r.duration_seconds, updated_at: r.updated_at,
@@ -236,6 +244,7 @@ export class SyncEngine {
       await this.#pullGuide();
       await this.#downloadBills(summary);
       await this.#downloadSelfies(summary);
+      await this.#downloadTaskFiles(summary);
 
       await this.#store.saveSyncState({ last_sync_at: this.clock().toISOString(), last_error: null });
     } catch (error) {
@@ -417,6 +426,29 @@ export class SyncEngine {
     }
   }
 
+  // The files of the manager's tasks (a quotation request comes with the specs, a picture, a sheet): fetched once, kept encrypted on the phone.
+  async #downloadTaskFiles(summary) {
+    let n = 0;
+
+    for (const task of this.#store.tasks) {
+      if (task.status === 'cancelled') continue;
+
+      for (const file of task.files) {
+        if (n >= TASK_FILES_PER_RUN) return;
+        if (await this.#store.hasTaskFile(task.id, file.id)) continue;
+        n++;
+
+        try {
+          const answer = await this.#http.get('/tasks/' + task.id + '/files/' + file.id, { token: this.#token() });
+          await this.#store.saveTaskFileFromServer(task.id, file.id, fromBase64(String(answer.data_base64 ?? '')));
+          summary.billsDown++;
+        } catch (error) {
+          if (!(error instanceof SyncError && ['NOT_FOUND', 'INVALID'].includes(error.code))) throw error;
+        }
+      }
+    }
+  }
+
   async #downloadBills(summary) {
     const missing = [];
     for (const expense of this.#store.expenses) {
@@ -520,6 +552,12 @@ export class SyncEngine {
     const action = decide(kind, local, cleaned);
     if (action === 'keep') return false;
 
+    // a task: the office's version wins, but a status the rep set that is not sent yet is kept (and still goes up)
+    if (kind === 'task' && local && !local.synced) {
+      cleaned = { ...cleaned, status: local.status, rep_note: local.rep_note, rep_updated_at: local.rep_updated_at, updated_at: local.updated_at };
+      await this.#store.putFromServer('task', cleaned, null, true);
+      return true;
+    }
     if (kind === 'expense') cleaned = keepPendingBill(local, cleaned);
     if (kind === 'meeting') cleaned = keepPendingCheckin(local, cleaned);
     // an office from before v1.19 sends no prospect link: it must not wipe the one the rep planned

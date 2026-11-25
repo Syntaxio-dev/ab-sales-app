@@ -18,10 +18,12 @@ export function openSelectSheet(select) {
   const rows = [...select.options].filter((o) => !o.hidden).map((o) => h('button', {
     type: 'button', class: 'sheet-option', role: 'option', 'aria-selected': String(o.index === select.selectedIndex), disabled: o.disabled,
     onclick() {
+      // The list closes FIRST. A `change` handler may open its own box ("+ Add a new position..." opens the New position box): closing the
+      // top page after that would close the new box instead of this list, and the choice would seem to do nothing.
+      closeTop();
       select.selectedIndex = o.index;
       select.dispatchEvent(new Event('input', { bubbles: true }));
       select.dispatchEvent(new Event('change', { bubbles: true }));
-      closeTop();
     },
   }, h('span', null, o.textContent), o.index === select.selectedIndex ? icon('check', 18) : null));
 

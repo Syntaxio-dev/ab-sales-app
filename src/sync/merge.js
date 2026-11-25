@@ -5,6 +5,7 @@ import { isLeadStatus, MAX_REMARK } from '../core/lead.js';
 import { RESULTS, STATUSES as MEETING_STATUSES, validStartTime } from '../core/meeting.js';
 import * as rules from '../core/rules.js';
 import * as geo from '../core/geo.js';
+import { MAX_MEMO_BODY, MAX_MEMO_TITLE, MAX_TASK_NOTE, MAX_TODO, PRIORITIES, isTaskStatus } from '../core/mywork.js';
 import { MAX_PEOPLE, MAX_REMARK as MAX_PROSPECT_REMARK, cleanLinkedin, isOutcome, isSource as isProspectSource } from '../core/prospect.js';
 
 // What the office sends back is NOT trusted blindly: every record is checked with the same rules as a record typed on the phone
@@ -337,6 +338,70 @@ export function cleanProspectNote(r) {
   };
 }
 
+// The rep's own to-do and note (private; they come back on a new phone).
+export function cleanTodo(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const updated = moment(r.updated_at);
+  const title = text(r.title, MAX_TODO);
+  if (!updated || title.length < 2) return null;
+
+  return {
+    id: r.uuid,
+    title,
+    done: r.done === true,
+    done_at: r.done === true && r.done_at ? moment(r.done_at) : null,
+    due_date: typeof r.due_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.due_date) ? r.due_date : null,
+    created_at: updated,
+    updated_at: updated,
+  };
+}
+
+export function cleanMemo(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const updated = moment(r.updated_at);
+  const body = text(r.body, MAX_MEMO_BODY);
+  if (!updated || !body) return null;
+
+  return { id: r.uuid, title: text(r.title, MAX_MEMO_TITLE), body, created_at: updated, updated_at: updated };
+}
+
+// A task the manager gave this rep. Everything in it is the office's, shown as text; the files are only listed (their bytes come later, one by one).
+export function cleanTask(r) {
+  if (!r || typeof r.uuid !== 'string' || !UUID.test(r.uuid)) return null;
+
+  const created = moment(r.created_at);
+  const title = text(r.title, 200);
+  if (!created || title.length < 2) return null;
+
+  const files = (Array.isArray(r.files) ? r.files : []).slice(0, 5)
+    .map((f) => ({
+      id: typeof f?.id === 'string' || Number.isInteger(f?.id) ? String(f.id) : '',
+      name: text(f?.name, 120),
+      mime: text(f?.mime, 100) || 'application/octet-stream',
+      size: Number.isInteger(f?.size) && f.size >= 0 && f.size <= 10_000_000 ? f.size : 0,
+    }))
+    .filter((f) => /^\d{1,12}$/.test(f.id) && f.name);
+
+  return {
+    id: r.uuid,
+    title,
+    description: text(r.description, 5000),
+    send_to_email: rules.email(r.send_to_email) === null ? text(r.send_to_email, 150) : '',
+    due_at: r.due_at ? moment(r.due_at) : null,
+    priority: PRIORITIES.includes(r.priority) ? r.priority : 'normal',
+    status: isTaskStatus(r.status) ? r.status : 'new',
+    rep_note: text(r.rep_note, MAX_TASK_NOTE),
+    rep_updated_at: r.rep_updated_at ? moment(r.rep_updated_at) : null,
+    assigned_by_name: text(r.assigned_by_name, 100),
+    version: Number.isInteger(r.version) && r.version >= 0 ? r.version : 0,
+    files,
+    created_at: created,
+    updated_at: moment(r.updated_at) ?? created,
+  };
+}
+
 // ---- the product guide (read only on the phone) ----
 
 const lines = (value, maxItems, maxLength) => (Array.isArray(value)
@@ -457,7 +522,7 @@ export function cleanGuide(answer) {
 }
 
 // A request for a guide note only ever goes from the phone to the office: nothing comes back to be merged.
-export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, route: cleanRoute, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null, script: cleanScript, prospect: cleanProspect, prospectnote: cleanProspectNote, bug: () => null };
+export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: cleanContact, meeting: cleanMeeting, route: cleanRoute, enquiry: cleanEnquiry, call: cleanCall, report: cleanReport, note: () => null, script: cleanScript, prospect: cleanProspect, prospectnote: cleanProspectNote, bug: () => null, todo: cleanTodo, memo: cleanMemo, task: cleanTask };
 
 // What to do with a record the office sent, given what the phone has:
 //  'create'  the phone does not have it (a new phone, or a restore)
@@ -467,6 +532,7 @@ export const CLEANERS = { expense: cleanExpense, client: cleanClient, contact: c
 // older office copy (the next push sends them); otherwise the newer of the two wins.
 export function decide(kind, local, server) {
   if (!local) return 'create';
+  if (kind === 'task') return Number(server.version) > Number(local.version ?? -1) ? 'replace' : 'keep'; // the office counts its own versions: no clock of a phone is involved
   if (kind === 'expense' && server.status !== 'pending') return 'replace';
   if (kind === 'call' || kind === 'prospectnote') return 'keep'; // a call never changes
   if (!local.synced) return 'keep';

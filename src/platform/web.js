@@ -88,6 +88,16 @@ export async function createWebPlatform() {
       });
     },
 
+    // browser: download a file that came from the office
+    async shareBytes(name, bytes, mime) {
+      const url = URL.createObjectURL(new Blob([bytes], { type: mime || 'application/octet-stream' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    },
+
     // browser: download the file
     async shareFile(name, text, mime) {
       const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));

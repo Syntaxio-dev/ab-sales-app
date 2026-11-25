@@ -5,13 +5,14 @@
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const error = (status, code, message, errors = {}) => json(status, { code, message, errors });
 
-const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'calls', 'reports', 'product_requests', 'scripts', 'prospects', 'prospect_notes', 'bug_reports'];
+const KINDS = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'calls', 'reports', 'product_requests', 'scripts', 'prospects', 'prospect_notes', 'bug_reports', 'todos', 'memos', 'tasks'];
 const NOT_PULLED = new Set(['product_requests', 'bug_reports']); // a rep's request for a guide note only goes to the office
 const STATUSES = ['qualification', 'need_analysis', 'proposal', 'negotiation', 'won', 'lost'];
 const SHARED = new Set(['clients', 'contacts', 'prospects', 'prospect_notes']);
-const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'scripts', 'prospects'];
+const DELETABLE = ['expenses', 'clients', 'contacts', 'meetings', 'routes', 'enquiries', 'scripts', 'prospects', 'todos', 'memos'];
 const LOGS = new Set(['calls', 'product_requests', 'prospect_notes', 'bug_reports']); // sent once, never changed
 const OUTCOMES = ['no_answer', 'call_back', 'interested', 'meeting_fixed', 'not_interested', 'wrong_number', 'do_not_call', 'converted'];
+const REP_TASK_STATUSES = ['in_progress', 'done', 'blocked'];
 const BUG_AREAS = ['expenses', 'clients', 'prospects', 'leads', 'meetings', 'guide', 'calls', 'sync', 'other'];
 const MEETING_STATUSES = ['planned', 'done', 'missed', 'moved'];
 const MEETING_FIELDS = ['status', 'scheduled_at', 'ended_at', 'route_uuid', 'result', 'moved_from', 'time_manual'];
@@ -29,6 +30,7 @@ export class FakeOffice {
     this.products = [];          // the product guide the manager wrote (raw, as the API sends it)
     this.brands = null;          // the brand guide (v1.18); null = an office older than that (sends no `brands` key)
     this.productsVersion = 'v0000000000000001';
+    this.taskFiles = new Map();  // `${task uuid}:${file id}` -> base64 (the files of the manager's tasks)
     this.bills = new Map();      // expense uuid -> base64
     this.selfies = new Map();    // meeting uuid -> base64 (the check-in selfie)
     this.restrictPool = false;   // true = the office of v1.10: a rep sees only their own clients and people plus the clients opened for them (`open(clientUuid, userId)`)
@@ -59,6 +61,32 @@ export class FakeOffice {
   review(uuid, status, reason = null) {
     const row = this.rows.expenses.get(uuid);
     row.data = { ...row.data, status, reject_reason: reason, reviewed_at: new Date().toISOString() };
+    row.rev = ++this.rev;
+  }
+
+  // the manager gives a rep a task (with files): { title, description, send_to_email, due_at, priority, files: [{ name, mime, text }] }
+  giveTask(code, input = {}) {
+    const user = this.users.get(code.toUpperCase());
+    const uuid = input.uuid ?? crypto.randomUUID();
+    const now = new Date().toISOString();
+    const files = (input.files ?? []).map((f, i) => ({ id: String(this.rev + i + 1), name: f.name, mime: f.mime ?? 'application/pdf', size: f.base64 ? Buffer.from(f.base64, 'base64').length : Buffer.byteLength(f.text ?? 'file') }));
+    (input.files ?? []).forEach((f, i) => this.taskFiles.set(uuid + ':' + files[i].id, f.base64 ?? Buffer.from(f.text ?? 'file').toString('base64')));
+
+    this.rows.tasks.set(uuid, {
+      owner: user.userId, deleted: false, rev: ++this.rev,
+      data: {
+        uuid, title: input.title ?? 'Quotation for Greenlam', description: input.description ?? 'Two furnaces, see the specs.', send_to_email: input.send_to_email ?? 'buyer@greenlam.example',
+        due_at: input.due_at ?? null, priority: input.priority ?? 'normal', status: 'new', rep_note: '', rep_updated_at: null, assigned_by_name: 'Manager', version: 1,
+        files, created_at: now, updated_at: now,
+      },
+    });
+    return uuid;
+  }
+
+  // the manager changes a task in the admin (cancel, reopen, edit): a new version
+  editTask(uuid, patch) {
+    const row = this.rows.tasks.get(uuid);
+    row.data = { ...row.data, ...patch, version: row.data.version + 1, updated_at: new Date().toISOString() };
     row.rev = ++this.rev;
   }
 
@@ -118,6 +146,13 @@ export class FakeOffice {
       return u.searchParams.get('version') === this.productsVersion
         ? json(200, { version: this.productsVersion, unchanged: true })
         : json(200, { version: this.productsVersion, unchanged: false, products: this.products, ...(this.brands ? { brands: this.brands } : {}) });
+    }
+
+    const taskFile = /^\/tasks\/([^/]+)\/files\/(\d+)$/.exec(path);
+    if (taskFile) {
+      const row = this.rows.tasks.get(taskFile[1]);
+      const data = this.taskFiles.get(taskFile[1] + ':' + taskFile[2]);
+      return row && row.owner === userId && row.data.status !== 'cancelled' && data ? json(200, { name: 'file', mime: 'application/octet-stream', data_base64: data }) : error(404, 'NOT_FOUND', 'This file is not available.');
     }
 
     const selfie = /^\/meetings\/([^/]+)\/selfie$/.exec(path);
@@ -225,6 +260,13 @@ export class FakeOffice {
       const prospect = this.rows.prospects.get(r.prospect_uuid);
       if (!prospect || prospect.deleted) return 'This prospect is not known.';
     }
+    if (kind === 'todos' && (String(r.title ?? '').trim().length < 2 || String(r.title).length > 200)) return 'The to-do is not valid.';
+    if (kind === 'memos' && (String(r.body ?? '').trim().length < 1 || String(r.body).length > 5000)) return 'The note is not valid.';
+    if (kind === 'tasks') {
+      if (!REP_TASK_STATUSES.includes(r.status)) return 'The status is not valid.';
+      if (r.status === 'blocked' && !String(r.rep_note ?? '').trim()) return 'Tell the manager why you cannot do it.';
+      if (String(r.rep_note ?? '').length > 500) return 'The note is too long.';
+    }
     if (kind === 'bug_reports') {
       if (!BUG_AREAS.includes(r.area)) return 'The place is not valid.';
       if (String(r.body ?? '').trim().length < 10 || String(r.body).length > 1000) return 'The report is too short or too long.';
@@ -260,6 +302,18 @@ export class FakeOffice {
       for (const [index, r] of (body[kind] ?? []).entries()) {
         const bad = this.validate(kind, r);
         if (bad) { results[kind].push({ uuid: r?.uuid ?? null, index, status: 'rejected', code: 'INVALID', message: bad }); continue; }
+
+        if (kind === 'tasks') {
+          const task = this.rows.tasks.get(r.uuid);
+          if (!task || task.owner !== userId) { results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'NOT_ALLOWED', message: 'This task is not yours.' }); continue; }
+          if (task.deleted || task.data.status === 'cancelled') { results[kind].push({ uuid: r.uuid, index, status: 'rejected', code: 'LOCKED', message: 'The manager cancelled this task.' }); continue; }
+          if (task.data.rep_updated_at && Date.parse(task.data.rep_updated_at) >= Date.parse(r.rep_updated_at)) { results[kind].push({ uuid: r.uuid, index, status: 'duplicate' }); continue; }
+
+          task.data = { ...task.data, status: r.status, rep_note: r.rep_note ?? '', rep_updated_at: r.rep_updated_at, version: task.data.version + 1, updated_at: new Date().toISOString() };
+          task.rev = ++this.rev;
+          results[kind].push({ uuid: r.uuid, index, status: 'accepted' });
+          continue;
+        }
 
         const row = this.rows[kind].get(r.uuid);
         const shared = SHARED.has(kind);

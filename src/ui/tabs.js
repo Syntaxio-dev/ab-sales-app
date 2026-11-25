@@ -12,6 +12,7 @@ import { officeCard } from './office.js';
 import { empty, fill, head } from './parts.js';
 import { openContactForm } from './people.js';
 import { modeSwitch, prospectMode, renderProspects, resetProspectView } from './prospects.js';
+import { resetWorkView, workCard } from './mywork.js';
 import { openSettings } from './settings.js';
 
 // The four main screens. Each one fills the scrolling view; `ctx` gives them goTab(id) and fab(label, onclick).
@@ -108,6 +109,8 @@ export function renderHome(container, app, ctx) {
         h('div', { class: 'num' }, String(store.unsyncedCount)),
         h('div', { class: 'hint' }, app.sync?.status.connected ? 'Waiting for the office' : 'Saved on this phone'))),
 
+    workCard(app),
+
     callsCard(app),
 
     needsActionCard(app, ctx),
@@ -191,6 +194,7 @@ export function resetTabViews() {
   expenseFilter = 'all';
   resetMeetingView();
   resetProspectView();
+  resetWorkView();
 }
 
 export function renderClients(container, app, ctx) {

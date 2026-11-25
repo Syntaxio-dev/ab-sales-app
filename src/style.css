@@ -812,3 +812,9 @@ a.btn { text-decoration: none; }
 .item a.link.sub { display: block; overflow-wrap: anywhere; text-align: left; padding: 0; min-height: 0; margin: 2px 0 0; }
 .person-card .section-head { margin-bottom: 0; }
 .prospect-person { align-items: flex-start; }
+
+/* ---- Tasks & notes (v1.20): the to-do tick, a task's text; everything else reuses the list rows, chips and cards ---- */
+.todo-check { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: 50%; border: 2px solid var(--line-strong); background: transparent; color: var(--btn-ink); }
+.todo-check[aria-checked='true'] { background: var(--btn-bg); border-color: var(--btn-bg); }
+.item.todo-done .title { text-decoration: line-through; color: var(--mute); }
+.task-text { margin: 0; white-space: pre-line; overflow-wrap: anywhere; line-height: 1.5; }
